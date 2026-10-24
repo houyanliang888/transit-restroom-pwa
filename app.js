@@ -1,40 +1,28 @@
 'use strict';
 
-/* 出行助手 · 乘车与公厕导航 PWA
- * 两种模式：
- *  - embed（内嵌）：填了高德 Key → 页面内直接显示附近列表、画线、导航
- *  - lite（免 Key）：没填 Key → 浏览器定位后，调起用户手机地图 App 搜索/规划，零注册零费用
+/* 出行助手 · 附近公厕与乘车导航 PWA
+ * 两种模式（按是否填高德 Key 自动切换）：
+ *  - embed（内嵌）：填了高德 JS API Key → 本页内直接显示附近列表、画线、导航（最实用）
+ *  - lite （临时）：没填 Key → 浏览器定位后，跳你手机地图 App 按当前位置搜索，零注册零费用
  */
 
 const STORE_KEY = 'amap_key_v1';
 const CITY_KEY  = 'last_city_v1';
 const PROV_KEY  = 'map_provider_v1';
 
-let AMap = null;
-let map = null;
+let AMap = null, map = null;
 let currentCity = localStorage.getItem(CITY_KEY) || '';
-let myLocation = null;                 // [lng, lat]
-let overlays = [];                     // 内嵌模式的标记/线
+let myLocation = null;                 // [lng, lat]（高德 GCJ-02 坐标）
+let rawLocation = null;                // [lng, lat]（GPS WGS-84，未纠偏）
+let overlays = [];
 let placeSearch = null, transfer = null, lineSearch = null, geocoder = null;
 let mode = null;                       // 'embed' | 'lite'
 
 /* 免 Key 调起地图的 URL 模板（均无需 Key） */
 const PROVIDERS = {
-  amap: {
-    name: '高德地图',
-    // uri.amap.com 是高德公开 URL API，唤起 App/网页做周边搜索，无需 Key
-    search: (kw, ll) => `https://uri.amap.com/search?keyword=${enc(kw)}`
-      + (ll ? `&location=${ll[0]},${ll[1]}&coordinate=gaode&callnative=1` : '')
-      + `&src=transit-pwa`,
-  },
-  baidu: {
-    name: '百度地图',
-    search: (kw, ll) => `https://map.baidu.com/search/${enc(kw)}` + (ll ? `@${ll[0]},${ll[1]}` : ''),
-  },
-  qq: {
-    name: '腾讯地图',
-    search: (kw) => `https://apis.map.qq.com/uri/v1/search?keyword=${enc(kw)}&referer=transit-pwa`,
-  },
+  amap: { name: '高德地图', search: (kw, ll) => `https://uri.amap.com/search?keyword=${enc(kw)}` + (ll ? `&location=${ll[0]},${ll[1]}&coordinate=gaode&callnative=1` : '') + `&src=tpwa` },
+  baidu: { name: '百度地图', search: (kw, ll) => `https://map.baidu.com/search/${enc(kw)}` + (ll ? `@${ll[0]},${ll[1]}` : '') },
+  qq: { name: '腾讯地图', search: (kw) => `https://apis.map.qq.com/uri/v1/search?keyword=${enc(kw)}&referer=tpwa` },
 };
 
 function enc(s) { return encodeURIComponent(s || ''); }
@@ -80,7 +68,7 @@ function toast(msg, ms = 1800) {
   toast._t = setTimeout(() => t.classList.add('hidden'), ms);
 }
 
-/* ================= 内嵌模式（embed） ================= */
+/* ================= 内嵌模式（embed，填了 Key） ================= */
 function loadAMap(key) {
   return new Promise((resolve, reject) => {
     if (window.AMap) return resolve(window.AMap);
@@ -113,7 +101,6 @@ function addMarker(lnglat, title, color) {
   const m = new AMap.Marker({ position: lnglat, title: title, offset: new AMap.Pixel(-15, -32), content: pinHTML(color, title), zIndex: 12 });
   map.add(m); overlays.push(m); return m;
 }
-
 function pinHTML(color, title) {
   const label = title && title.length > 6 ? title.slice(0, 6) + '…' : (title || '');
   return `<div style="width:30px;height:40px;position:relative;transform:translateZ(0);">
@@ -124,14 +111,13 @@ function pinHTML(color, title) {
     ${label ? `<span style="position:absolute;top:34px;left:50%;transform:translateX(-50%);background:#fff;color:#0f172a;font-size:10px;padding:1px 5px;border-radius:6px;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.2)">${label}</span>` : ''}
   </div>`;
 }
-
 const COLORS = { bus: '#16a34a', metro: '#0ea5e9', wc: '#f59e0b', me: '#2b6cff' };
 
 function locateMe() {
   if (!navigator.geolocation) { fallbackLocate(); return; }
   navigator.geolocation.getCurrentPosition(
     (pos) => onLocated(pos.coords.longitude, pos.coords.latitude),
-    () => { toast('GPS 定位失败，尝试高精度'); fallbackLocate(); },
+    () => { toast('GPS 定位失败，尝试高精度定位'); fallbackLocate(); },
     { enableHighAccuracy: true, timeout: 9000, maximumAge: 0 }
   );
 }
@@ -144,6 +130,7 @@ function fallbackLocate() {
 }
 function onLocated(lng, lat) {
   myLocation = [lng, lat];
+  rawLocation = myLocation.slice();
   map.setCenter(myLocation);
   addMarker(myLocation, '我的位置', COLORS.me);
   reverseCity(myLocation);
@@ -183,7 +170,7 @@ function searchNearby(keyword, colorKey) {
   });
 }
 function planTransfer() {
-  const dest = $('destInput').value.trim();
+  const dest = $('destInput2').value.trim();
   if (!dest) { toast('请输入目的地'); return; }
   if (!myLocation) { toast('请先定位'); locateMe(); return; }
   if (!currentCity) { toast('正在获取城市，请稍候'); return; }
@@ -223,34 +210,35 @@ function renderList(items) {
     li.innerHTML = `<div class="li-main"><div class="li-name">${escapeHTML(it.name)}</div><div class="li-sub">${escapeHTML(it.addr || '')}</div></div>`
       + (distTxt ? `<div class="li-dist">${distTxt}</div>` : '') + `<button class="li-go">导航</button>`;
     li.querySelector('.li-go').addEventListener('click', (e) => { e.stopPropagation(); goThere(it.loc, it.name); });
-    li.addEventListener('click', () => map.setCenter(it.loc));
+    li.addEventListener('click', () => { if (map) map.setCenter(it.loc); });
     ul.appendChild(li);
   });
 }
 function goThere(loc, name) {
-  window.open(`https://uri.amap.com/navigation?to=${loc[0]},${loc[1]},${enc(name)}&mode=bus&src=transit-pwa&coordinate=gaode&callnative=1`, '_blank');
+  window.open(`https://uri.amap.com/navigation?to=${loc[0]},${loc[1]},${enc(name)}&mode=bus&src=tpwa&coordinate=gaode&callnative=1`, '_blank');
 }
 function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-/* ================= 免 Key 模式（lite） ================= */
+/* ================= 临时模式（lite，未填 Key） ================= */
 function enterLite() {
   mode = 'lite';
   $('map').style.display = 'none';
   $('litePanel').classList.remove('hidden');
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
-  $('cityTag').textContent = '出行助手';
   $('providerSel').value = provider();
   locateMeLite();
 }
 function locateMeLite() {
   if (!navigator.geolocation) { $('liteStatus').textContent = '此设备不支持定位'; return; }
+  $('liteStatus').textContent = '正在定位…';
   navigator.geolocation.getCurrentPosition(
     (pos) => {
-      myLocation = [pos.coords.longitude, pos.coords.latitude];
-      $('cityTag').textContent = '出行助手 · 已定位';
-      $('liteStatus').textContent = '已定位 ✓ 可点击下方按钮查看附近';
+      rawLocation = [pos.coords.longitude, pos.coords.latitude];
+      const g = wgs84ToGcj02(pos.coords.latitude, pos.coords.longitude);
+      myLocation = [g.lng, g.lat];
+      $('liteStatus').textContent = '已定位 ✓ 点击下方按钮，用手机地图搜附近';
       toast('已定位');
     },
     () => { $('liteStatus').textContent = '定位失败，请允许定位权限后重试'; toast('定位失败'); },
@@ -258,15 +246,12 @@ function locateMeLite() {
   );
 }
 function openMapSearch(kw) {
-  // 高德：传纠偏后的 GCJ-02 坐标，确保"附近"准确居中（出差到陌生城市也准）
-  // 百度/腾讯：不传坐标，交由 App 自身定位，避免坐标体系不一致导致偏移
   const key = provider();
   const p = PROVIDERS[key];
+  // 高德：传纠偏后的 GCJ-02 坐标，确保"附近"准确居中；百度/腾讯：交 App 自身定位
   let ll = null;
-  if (myLocation && key === 'amap') {
-    const g = wgs84ToGcj02(myLocation[1], myLocation[0]);
-    ll = [g.lng, g.lat];
-  }
+  if (myLocation && key === 'amap') ll = myLocation;
+  else if (myLocation) ll = myLocation; // 百度/腾讯也能收 GCJ-02 近似居中，体验可接受
   window.open(p.search(kw, ll), '_blank');
   toast('已用' + p.name + '（当前位置）搜索：' + kw);
 }
@@ -285,10 +270,9 @@ function showBox(which) {
   ['nearbyBox', 'routeBox', 'lineBox'].forEach(id => $(id).classList.add('hidden'));
   if (which) $(which).classList.remove('hidden');
 }
-function openSettings(force) {
+function openSettings() {
   $('keyInput').value = localStorage.getItem(STORE_KEY) || '';
   $('settingsModal').classList.remove('hidden');
-  if (force) toast('可填 Key 升级内嵌地图，也可直接关闭用免 Key 模式');
 }
 function setActive(id) {
   ['btnLocate', 'btnNearby', 'btnRoute', 'btnLine'].forEach(b => $(b).classList.remove('active'));
@@ -296,7 +280,8 @@ function setActive(id) {
 }
 
 function bindAll() {
-  $('btnSettings').addEventListener('click', () => openSettings());
+  // 设置
+  $('btnSettings').addEventListener('click', openSettings);
   $('btnSaveKey').addEventListener('click', () => {
     const k = $('keyInput').value.trim();
     if (!k) { toast('请输入 Key'); return; }
@@ -309,8 +294,10 @@ function bindAll() {
   $('sheetClose').addEventListener('click', closeSheet);
   $('providerSel').addEventListener('change', () => localStorage.setItem(PROV_KEY, $('providerSel').value));
 
+  // 定位
   $('btnLocate').addEventListener('click', () => { setActive('btnLocate'); mode === 'embed' ? locateMe() : locateMeLite(); });
 
+  // 附近（底部栏 → 弹出子菜单；内嵌模式用地图搜索，临时模式跳地图）
   $('btnNearby').addEventListener('click', () => { setActive('btnNearby'); $('nearbyMenu').classList.toggle('open'); });
   $('nearbyMenu').querySelectorAll('button').forEach(b => {
     b.addEventListener('click', () => {
@@ -319,18 +306,24 @@ function bindAll() {
       else { openMapSearch(b.dataset.kw); }
     });
   });
+  // 临时面板里的三个大按钮（直接跳地图搜）
+  document.querySelectorAll('#litePanel .q').forEach(b => {
+    b.addEventListener('click', () => openMapSearch(b.dataset.kw));
+  });
+  $('btnPlanLite').addEventListener('click', openMapNav);
 
+  // 路线
   $('btnRoute').addEventListener('click', () => {
-    setActive('btnRoute'); showBox('routeBox');
-    if (mode === 'embed') $('routePanel').innerHTML = '<p class="hint">输入目的地，用当前位置做起点规划公交/地铁路线。</p>';
-    openSheet('乘车路线规划');
-    setTimeout(() => $('destInput').focus(), 200);
+    setActive('btnRoute'); showBox('routeBox'); openSheet('乘车路线规划');
+    setTimeout(() => (mode === 'embed' ? $('destInput2') : $('destInput')).focus(), 200);
   });
   $('btnPlan').addEventListener('click', () => mode === 'embed' ? planTransfer() : openMapNav());
-  $('destInput').addEventListener('keydown', e => { if (e.key === 'Enter') (mode === 'embed' ? planTransfer() : openMapNav()); });
+  $('destInput2').addEventListener('keydown', e => { if (e.key === 'Enter') planTransfer(); });
+  $('destInput').addEventListener('keydown', e => { if (e.key === 'Enter') openMapNav(); });
 
+  // 查线
   $('btnLine').addEventListener('click', () => {
-    setActive('btnLine'); showBox('lineBox'); openSheet('查询公交/地铁线路');
+    setActive('btnLine'); showBox('lineBox'); openSheet('查询公交 / 地铁线路');
     setTimeout(() => $('lineInput').focus(), 200);
   });
   $('btnLineQuery').addEventListener('click', () => {
@@ -346,7 +339,7 @@ async function boot() {
   const key = localStorage.getItem(STORE_KEY);
   if (key) {
     try { AMap = await loadAMap(key); initMap(); bindAll(); return; }
-    catch (e) { /* Key 失效则降级免 Key 模式 */ }
+    catch (e) { /* Key 失效则降级临时模式 */ toast('Key 加载失败，进入临时版'); }
   }
   enterLite();
   bindAll();
