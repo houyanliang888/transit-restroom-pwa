@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#2b6cff" />
+  <title>出行助手 · 乘车与公厕导航</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <!-- 顶栏 -->
+  <header id="topbar">
+    <div class="brand">
+      <span class="logo">🧭</span>
+      <div class="brand-txt">
+        <strong>出行助手</strong>
+        <small id="cityTag">定位中…</small>
+      </div>
+    </div>
+    <button id="btnSettings" class="icon-btn" aria-label="设置">⚙</button>
+  </header>
+
+  <!-- 地图（内嵌模式） -->
+  <div id="map"></div>
+
+  <!-- 免 Key 模式面板（无高德 Key 时显示） -->
+  <div id="litePanel" class="lite-panel hidden">
+    <div class="lite-card">
+      <div class="lite-badge">免 Key 模式 · 无需注册</div>
+      <h2>出行助手</h2>
+      <p class="hint">点击下方「附近 / 路线 / 查线」，会直接在你手机地图里（<strong>按你当前所在位置</strong>）搜出
+        <strong>附近的公交站、地铁站、公共卫生间</strong>，或规划乘车路线。定位与导航由你选择的地图 App 完成，数据最全最准；没装高德也能用，切换百度/腾讯即可。任何人扫码即可用，无需配置。</p>
+      <label class="lite-row">使用地图：
+        <select id="providerSel">
+          <option value="amap">高德地图（推荐）</option>
+          <option value="baidu">百度地图</option>
+          <option value="qq">腾讯地图</option>
+        </select>
+      </label>
+      <div id="liteStatus" class="lite-status">正在定位…</div>
+    </div>
+  </div>
+
+  <!-- 结果底部抽屉 -->
+  <section id="sheet" class="sheet">
+    <div class="sheet-head">
+      <span id="sheetTitle">结果</span>
+      <button id="sheetClose" class="icon-btn">✕</button>
+    </div>
+    <div class="sheet-body">
+      <!-- 附近 -->
+      <div id="nearbyBox" class="box">
+        <ul id="resultList" class="result-list"></ul>
+      </div>
+      <!-- 路线规划 -->
+      <div id="routeBox" class="box hidden">
+        <div class="search-row">
+          <input id="destInput" type="text" inputmode="search" placeholder="输入目的地，如：火车站 / 万达广场" />
+          <button id="btnPlan" class="primary">查路线</button>
+        </div>
+        <div id="routePanel" class="route-panel"></div>
+      </div>
+      <!-- 查线路 -->
+      <div id="lineBox" class="box hidden">
+        <div class="search-row">
+          <input id="lineInput" type="text" inputmode="search" placeholder="输入线路名，如：地铁1号线 / 1路 / K2" />
+          <button id="btnLineQuery" class="primary">查线路</button>
+        </div>
+        <ul id="lineList" class="result-list"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 附近子菜单 -->
+  <div id="nearbyMenu" class="nearby-menu hidden">
+    <button data-kw="公交站" data-color="bus">🚌 公交站</button>
+    <button data-kw="地铁站" data-color="metro">🚇 地铁站</button>
+    <button data-kw="公共厕所" data-color="wc">🚻 公共卫生间</button>
+  </div>
+
+  <!-- 底部操作栏 -->
+  <nav id="bottombar">
+    <button id="btnLocate"><span>📍</span><small>定位</small></button>
+    <button id="btnNearby"><span>🗺️</span><small>附近</small></button>
+    <button id="btnRoute"><span>🚌</span><small>路线</small></button>
+    <button id="btnLine"><span>🚉</span><small>查线</small></button>
+  </nav>
+
+  <!-- 设置弹窗 -->
+  <div id="settingsModal" class="modal hidden">
+    <div class="modal-card">
+      <h3>高德地图 Key 设置</h3>
+      <p class="hint">本应用地图数据来自高德地图，需要你自己的免费 Key。<br/>
+        1. 打开 <a href="https://lbs.amap.com/" target="_blank" rel="noopener">lbs.amap.com</a> 注册并登录<br/>
+        2. 控制台 → 应用管理 → 创建应用 → 添加 Key，服务平台选「<b>Web端(JS API)</b>」<br/>
+        3. 把 Key 粘贴到下面，保存即可。Key 只存在你手机本地。<br/><br/>
+        不想申请 Key？直接关闭本窗口也能用：默认进入「免 Key 模式」，点按钮会在你手机地图里搜索，无需任何配置。填了 Key 则升级为内嵌地图（页面内直接看站点列表与画线）。</p>
+      <input id="keyInput" type="text" placeholder="粘贴高德 Key" />
+      <div class="modal-actions">
+        <button id="btnHelp" class="ghost">使用说明</button>
+        <button id="btnSaveKey" class="primary">保存并加载</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 说明弹窗 -->
+  <div id="helpModal" class="modal hidden">
+    <div class="modal-card">
+      <h3>使用说明</h3>
+      <p class="hint">
+        • <b>定位</b>：点底部「定位」获取你当前位置（需允许浏览器定位权限，且页面为 https）。<br/><br/>
+        • <b>附近</b>：选公交站 / 地铁站 / 公共卫生间，自动列出 2 公里内点位，点「导航」调起高德前往。<br/><br/>
+        • <b>路线</b>：输入目的地，自动用当前位置做起点，规划全国公交/地铁路线。<br/><br/>
+        • <b>查线</b>：输入线路名（如「地铁1号线」「1路」），显示该线路全程站点与走向。<br/><br/>
+        • <b>关于数据</b>：站点、路线、公厕均来自地图实时数据，<b>需要联网</b>；App 界面本身可离线打开。<br/><br/>
+        • <b>两种模式</b>：没填高德 Key 时是「免 Key 模式」——点按钮跳到你选的地图 App 里、按当前位置搜索；没装高德也能用，切到百度/腾讯地图即可。填了 Key 则在页面内直接显示附近列表并可画线导航。<br/><br/>
+        • <b>安装到手机</b>：浏览器菜单 → 「添加到主屏幕」，即可像 App 一样放在桌面使用。
+      </p>
+      <div class="modal-actions">
+        <button id="btnHelpClose" class="primary">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 轻提示 -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

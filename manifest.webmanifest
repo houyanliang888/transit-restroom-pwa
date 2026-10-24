@@ -1,0 +1,15 @@
+{
+  "name": "出行助手 · 乘车与公厕导航",
+  "short_name": "出行助手",
+  "description": "全国公交/地铁站点、乘车路线规划、附近公共卫生间定位",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#2b6cff",
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
