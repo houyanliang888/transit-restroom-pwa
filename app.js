@@ -8,26 +8,35 @@
 
 const STORE_KEY = 'amap_key_v1';
 const CITY_KEY  = 'last_city_v1';
+const SELCITY_KEY = 'selected_city_v1';
 const PROV_KEY  = 'map_provider_v1';
 
 let AMap = null, map = null;
 let currentCity = localStorage.getItem(CITY_KEY) || '';
+let selectedCity = localStorage.getItem(SELCITY_KEY) || '';  // 用户手动选择的城市（空=用 GPS）
+const cityCenterCache = {};            // 城市名 → [lng,lat] 中心坐标缓存
 let myLocation = null;                 // [lng, lat]（高德 GCJ-02 坐标）
 let rawLocation = null;                // [lng, lat]（GPS WGS-84，未纠偏）
 let overlays = [];
 let placeSearch = null, transfer = null, lineSearch = null, geocoder = null;
 let mode = null;                       // 'embed' | 'lite'
 
-/* 免 Key 调起地图的 URL 模板（均无需 Key） */
+/* 免 Key 调起地图的 URL 模板（均无需 Key）；city 非空时限定城市，搜线路/跨城更准 */
 const PROVIDERS = {
-  amap: { name: '高德地图', search: (kw, ll) => `https://uri.amap.com/search?keyword=${enc(kw)}` + (ll ? `&location=${ll[0]},${ll[1]}&coordinate=gaode&callnative=1` : '') + `&src=tpwa` },
-  baidu: { name: '百度地图', search: (kw, ll) => `https://map.baidu.com/search/${enc(kw)}` + (ll ? `@${ll[0]},${ll[1]}` : '') },
-  qq: { name: '腾讯地图', search: (kw) => `https://apis.map.qq.com/uri/v1/search?keyword=${enc(kw)}&referer=tpwa` },
+  amap: { name: '高德地图', search: (kw, ll, city) => `https://uri.amap.com/search?keyword=${enc(kw)}` + (city ? `&region=${enc(city)}` : '') + (ll ? `&location=${ll[0]},${ll[1]}&coordinate=gaode&callnative=1` : '') + `&src=tpwa` },
+  baidu: { name: '百度地图', search: (kw, ll, city) => `https://map.baidu.com/search/${enc(kw)}` + (city ? `&region=${enc(city)}` : '') + (ll ? `@${ll[0]},${ll[1]}` : '') },
+  qq: { name: '腾讯地图', search: (kw, ll, city) => `https://apis.map.qq.com/uri/v1/search?keyword=${enc(kw)}` + (city ? `&region=${enc(city)}` : '') + `&referer=tpwa` },
 };
 
 function enc(s) { return encodeURIComponent(s || ''); }
 const $ = (id) => document.getElementById(id);
 function provider() { return localStorage.getItem(PROV_KEY) || 'amap'; }
+function updateCityTag() {
+  const el = $('cityTag');
+  if (selectedCity) el.textContent = selectedCity + '（已选）';
+  else if (currentCity) el.textContent = currentCity;
+  else el.textContent = '定位中…';
+}
 
 /* 坐标纠偏：浏览器 GPS 是 WGS-84，中国地图用 GCJ-02（高德/腾讯）/ BD-09（百度）。
    不纠偏会有几百米偏移；这里把 GPS 转成高德坐标，保证"附近"搜索准确居中。 */
@@ -91,7 +100,7 @@ function initMap() {
   lineSearch = new AMap.LineSearch({ city: currentCity, pageSize: 1, extensions: 'all' });
   geocoder = new AMap.Geocoder({});
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
-  if (currentCity) $('cityTag').textContent = '城市：' + currentCity;
+  updateCityTag();
   locateMe();
 }
 
@@ -144,16 +153,45 @@ function reverseCity(ll) {
       localStorage.setItem(CITY_KEY, currentCity);
       try { transfer.setCity(currentCity); } catch (e) {}
       try { lineSearch.setCity(currentCity); } catch (e) {}
-      $('cityTag').textContent = '城市：' + (c.city || c.province);
+      updateCityTag();
     }
   });
 }
+/* 城市名 → 中心点坐标（内嵌模式手动选城市时，用中心坐标做"附近/路线"基准） */
+function cityToCenter(name) {
+  return new Promise((resolve, reject) => {
+    if (!geocoder) return reject(new Error('地图未加载'));
+    geocoder.getLocation(name, (status, res) => {
+      if (status === 'complete' && res.geocodes && res.geocodes.length) {
+        const loc = res.geocodes[0].location;
+        resolve([loc.lng, loc.lat]);
+      } else reject(new Error('城市解析失败'));
+    });
+  });
+}
 function searchNearby(keyword, colorKey) {
-  if (!myLocation) { toast('请先定位'); locateMe(); return; }
+  let center = myLocation;
+  if (selectedCity) {
+    // 手动选了城市 → 以该城市中心为基准搜（提前查出差地、或定位失败时兜底）
+    if (!cityCenterCache[selectedCity]) {
+      toast('正在定位「' + selectedCity + '」中心…');
+      cityToCenter(selectedCity).then(ll => {
+        cityCenterCache[selectedCity] = ll;
+        doNearby(keyword, colorKey, ll);
+      }).catch(() => toast('城市解析失败，请检查城市名'));
+      return;
+    }
+    center = cityCenterCache[selectedCity];
+  } else if (!center) {
+    toast('请先定位或选择城市'); locateMe(); return;
+  }
+  doNearby(keyword, colorKey, center);
+}
+function doNearby(keyword, colorKey, center) {
   clearOverlays();
-  addMarker(myLocation, '我的位置', COLORS.me);
-  const center = new AMap.LngLat(myLocation[0], myLocation[1]);
-  placeSearch.searchNearBy(keyword, center, 2000, (status, res) => {
+  addMarker(center, selectedCity || '我的位置', COLORS.me);
+  const c = new AMap.LngLat(center[0], center[1]);
+  placeSearch.searchNearBy(keyword, c, 2000, (status, res) => {
     if (status !== 'complete' || !res.poiList || !res.poiList.pois.length) {
       toast('附近 2 公里内未找到「' + keyword + '」'); return;
     }
@@ -172,15 +210,25 @@ function searchNearby(keyword, colorKey) {
 function planTransfer() {
   const dest = $('destInput2').value.trim();
   if (!dest) { toast('请输入目的地'); return; }
-  if (!myLocation) { toast('请先定位'); locateMe(); return; }
-  if (!currentCity) { toast('正在获取城市，请稍候'); return; }
+  const city = selectedCity || currentCity;
+  if (!city) { toast('请先定位或选择城市'); locateMe(); return; }
+  try { transfer.setCity(city); } catch (e) {}
+  const start = myLocation || cityCenterCache[city];
+  if (start) { doTransfer(start, dest); return; }
+  toast('正在定位「' + city + '」中心…');
+  cityToCenter(city).then(ll => { cityCenterCache[city] = ll; doTransfer(ll, dest); })
+    .catch(() => toast('城市解析失败，请检查城市名'));
+}
+function doTransfer(start, dest) {
   $('routePanel').innerHTML = '<p class="hint">规划中…</p>';
-  transfer.search(myLocation, dest, (status) => { if (status !== 'complete') toast('路线规划失败，换个目的地试试'); });
+  transfer.search(start, dest, (status) => { if (status !== 'complete') toast('路线规划失败，换个目的地试试'); });
 }
 function searchLine() {
   const name = $('lineInput').value.trim();
   if (!name) { toast('请输入线路名，如 地铁1号线 / 1路'); return; }
-  if (!currentCity) { toast('正在获取城市，请稍候'); return; }
+  const city = selectedCity || currentCity;
+  if (!city) { toast('请先定位或选择城市'); return; }
+  try { lineSearch.setCity(city); } catch (e) {}
   lineSearch.search(name, (status, res) => {
     if (status !== 'complete' || !res.lineInfo || !res.lineInfo.length) {
       toast('未找到「' + name + '」，确认线路名或城市'); return;
@@ -228,6 +276,7 @@ function enterLite() {
   $('litePanel').classList.remove('hidden');
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
   $('providerSel').value = provider();
+  updateCityTag();
   locateMeLite();
 }
 function locateMeLite() {
@@ -240,10 +289,23 @@ function locateMeLite() {
       myLocation = [g.lng, g.lat];
       $('liteStatus').textContent = '已定位 ✓ 点击下方按钮，用手机地图搜附近';
       toast('已定位');
+      reverseCityLite(pos.coords.latitude, pos.coords.longitude);
     },
     () => { $('liteStatus').textContent = '定位失败，请允许定位权限后重试'; toast('定位失败'); },
     { enableHighAccuracy: true, timeout: 9000, maximumAge: 0 }
   );
+}
+function reverseCityLite(lat, lng) {
+  // 免 Key 逆地理（OSM，无需 Key）；失败不影响主流程，城市可手动选
+  fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=zh-CN&zoom=10`)
+    .then(r => r.json())
+    .then(d => {
+      if (d && d.address) {
+        const c = d.address.city || d.address.town || d.address.state || '';
+        if (c) { currentCity = c.replace(/市$/, ''); localStorage.setItem(CITY_KEY, currentCity); updateCityTag(); }
+      }
+    })
+    .catch(() => {});
 }
 function openMapSearch(kw) {
   const key = provider();
@@ -252,8 +314,9 @@ function openMapSearch(kw) {
   let ll = null;
   if (myLocation && key === 'amap') ll = myLocation;
   else if (myLocation) ll = myLocation; // 百度/腾讯也能收 GCJ-02 近似居中，体验可接受
-  window.open(p.search(kw, ll), '_blank');
-  toast('已用' + p.name + '（当前位置）搜索：' + kw);
+  const city = selectedCity || currentCity || '';
+  window.open(p.search(kw, ll, city), '_blank');
+  toast('已用' + p.name + (city ? '（' + city + '）' : '（当前位置）') + '搜索：' + kw);
 }
 function openMapNav() {
   const dest = $('destInput').value.trim();
@@ -266,6 +329,36 @@ function openMapNav() {
 /* ================= 通用 UI ================= */
 function openSheet(title) { $('sheetTitle').textContent = title || '结果'; $('sheet').classList.add('open'); }
 function closeSheet() { $('sheet').classList.remove('open'); }
+
+/* 城市选择弹窗 */
+function openCityModal() {
+  $('cityInput').value = selectedCity;
+  $('cityModal').classList.remove('hidden');
+  setTimeout(() => { try { $('cityInput').focus(); } catch (e) {} }, 100);
+}
+function closeCityModal() { $('cityModal').classList.add('hidden'); }
+function chooseCity(name) {
+  selectedCity = (name || '').replace(/市$/, '').trim();
+  if (!selectedCity) { toast('请输入城市名'); return; }
+  localStorage.setItem(SELCITY_KEY, selectedCity);
+  updateCityTag();
+  closeCityModal();
+  toast('已选择城市：' + selectedCity);
+  if (mode === 'embed' && map) {
+    const apply = (ll) => { myLocation = ll; map.setCenter(ll); clearOverlays(); addMarker(ll, selectedCity, COLORS.me); };
+    if (cityCenterCache[selectedCity]) apply(cityCenterCache[selectedCity]);
+    else cityToCenter(selectedCity).then(ll => { cityCenterCache[selectedCity] = ll; apply(ll); }).catch(() => toast('城市解析失败'));
+  }
+}
+function useMyLocation() {
+  selectedCity = '';
+  localStorage.removeItem(SELCITY_KEY);
+  closeCityModal();
+  updateCityTag();
+  toast('已切换为：我的位置');
+  mode === 'embed' ? locateMe() : locateMeLite();
+}
+
 function showBox(which) {
   ['nearbyBox', 'routeBox', 'lineBox'].forEach(id => $(id).classList.add('hidden'));
   if (which) $(which).classList.remove('hidden');
@@ -293,6 +386,14 @@ function bindAll() {
   $('btnHelpClose').addEventListener('click', () => $('helpModal').classList.add('hidden'));
   $('sheetClose').addEventListener('click', closeSheet);
   $('providerSel').addEventListener('change', () => localStorage.setItem(PROV_KEY, $('providerSel').value));
+
+  // 城市选择
+  $('cityPick').addEventListener('click', openCityModal);
+  $('btnCityCancel').addEventListener('click', closeCityModal);
+  $('btnCityOk').addEventListener('click', () => chooseCity($('cityInput').value));
+  $('cityInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnCityOk').click(); });
+  $('btnCityLocate').addEventListener('click', useMyLocation);
+  document.querySelectorAll('#cityModal .city-chip').forEach(b => b.addEventListener('click', () => chooseCity(b.dataset.city)));
 
   // 定位
   $('btnLocate').addEventListener('click', () => { setActive('btnLocate'); mode === 'embed' ? locateMe() : locateMeLite(); });

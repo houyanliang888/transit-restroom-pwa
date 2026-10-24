@@ -25,7 +25,11 @@ body{display:flex;flex-direction:column;overflow:hidden;}
 .logo{font-size:22px;}
 .brand-txt{display:flex;flex-direction:column;line-height:1.1;}
 .brand-txt strong{font-size:16px;letter-spacing:.5px;}
-.brand-txt small{font-size:11px;opacity:.85;}
+.city-pick{border:none;background:rgba(255,255,255,.12);color:#fff;font-size:11px;font-family:inherit;
+  display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:20px;cursor:pointer;max-width:58vw;}
+.city-pick #cityTag{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:48vw;}
+.city-pick .caret{font-size:9px;opacity:.85;flex:none;}
+.city-pick:active{background:rgba(255,255,255,.28);}
 .icon-btn{
   border:none;background:rgba(255,255,255,.15);color:#fff;width:36px;height:36px;border-radius:10px;
   font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;
@@ -125,6 +129,15 @@ body{display:flex;flex-direction:column;overflow:hidden;}
 .hint a{color:var(--accent);}
 .modal-actions{display:flex;gap:10px;justify-content:flex-end;}
 .ghost{border:1px solid var(--line);background:#fff;color:#334155;border-radius:12px;padding:10px 16px;cursor:pointer;font-size:14px;}
+
+/* 城市选择 */
+.city-search{display:flex;gap:8px;margin-bottom:12px;}
+.city-search input{flex:1;border:1px solid var(--line);border-radius:12px;padding:11px;font-size:15px;outline:none;min-width:0;}
+.city-search input:focus{border-color:var(--accent);}
+.city-hot{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;}
+.city-hot .hot-label{font-size:13px;color:var(--muted);margin-right:2px;}
+.city-chip{border:1px solid var(--line);background:#f8fafc;color:#334155;border-radius:20px;padding:7px 13px;font-size:13px;cursor:pointer;white-space:nowrap;}
+.city-chip:active{background:#eef2ff;color:var(--accent);border-color:var(--accent);}
 
 /* 轻提示 */
 .toast{

@@ -16,7 +16,7 @@
       <span class="logo">🧭</span>
       <div class="brand-txt">
         <strong>出行助手</strong>
-        <small id="cityTag">定位中…</small>
+        <button id="cityPick" class="city-pick"><span id="cityTag">定位中…</span><span class="caret">▾</span></button>
       </div>
     </div>
     <button id="btnSettings" class="icon-btn" aria-label="设置">⚙</button>
@@ -133,6 +133,45 @@
       </p>
       <div class="modal-actions">
         <button id="btnHelpClose" class="primary">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 城市选择弹窗 -->
+  <div id="cityModal" class="modal hidden">
+    <div class="modal-card">
+      <h3>选择城市</h3>
+      <p class="hint">手动选城市后，可查该城市的公交 / 地铁 / 公厕（不依赖定位）；不选则自动用你的当前位置。</p>
+      <div class="city-search">
+        <input id="cityInput" type="text" inputmode="search" placeholder="输入城市名，如：长治 / 北京 / 上海" />
+        <button id="btnCityOk" class="primary">确定</button>
+      </div>
+      <div class="city-hot">
+        <span class="hot-label">热门：</span>
+        <button class="city-chip" data-city="北京">北京</button>
+        <button class="city-chip" data-city="上海">上海</button>
+        <button class="city-chip" data-city="广州">广州</button>
+        <button class="city-chip" data-city="深圳">深圳</button>
+        <button class="city-chip" data-city="成都">成都</button>
+        <button class="city-chip" data-city="杭州">杭州</button>
+        <button class="city-chip" data-city="西安">西安</button>
+        <button class="city-chip" data-city="重庆">重庆</button>
+        <button class="city-chip" data-city="武汉">武汉</button>
+        <button class="city-chip" data-city="南京">南京</button>
+        <button class="city-chip" data-city="天津">天津</button>
+        <button class="city-chip" data-city="长沙">长沙</button>
+        <button class="city-chip" data-city="郑州">郑州</button>
+        <button class="city-chip" data-city="青岛">青岛</button>
+        <button class="city-chip" data-city="厦门">厦门</button>
+        <button class="city-chip" data-city="昆明">昆明</button>
+        <button class="city-chip" data-city="沈阳">沈阳</button>
+        <button class="city-chip" data-city="大连">大连</button>
+        <button class="city-chip" data-city="苏州">苏州</button>
+        <button class="city-chip" data-city="长治">长治</button>
+      </div>
+      <div class="modal-actions">
+        <button id="btnCityLocate" class="ghost">📍 用我的位置</button>
+        <button id="btnCityCancel" class="primary">关闭</button>
       </div>
     </div>
   </div>
