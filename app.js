@@ -196,6 +196,7 @@ function searchNearby(keyword, colorKey) {
   doNearby(keyword, colorKey, center);
 }
 function doNearby(keyword, colorKey, center) {
+  if (!navigator.onLine) { toast('当前无网络，请连网后重试'); return; }
   clearOverlays();
   addMarker(center, selectedCity || '我的位置', COLORS.me);
   const c = new AMap.LngLat(center[0], center[1]);
@@ -203,14 +204,16 @@ function doNearby(keyword, colorKey, center) {
   const timer = setTimeout(() => {
     if (done) return;
     done = true;
-    toast('搜索超时，请检查网络后重试');
+    toast('搜索超时' + keyErrorHint('timeout'));
   }, 15000);
   placeSearch.searchNearBy(keyword, c, 2000, (status, res) => {
     if (done) return;
     done = true;
     clearTimeout(timer);
     if (status !== 'complete' || !res.poiList || !res.poiList.pois.length) {
-      toast('附近 2 公里内未找到「' + keyword + '」'); return;
+      if (status !== 'complete') toast('搜索失败' + keyErrorHint(status));
+      else toast('附近 2 公里内未找到「' + keyword + '」');
+      return;
     }
     const pois = res.poiList.pois;
     const color = COLORS[colorKey] || COLORS.bus;
@@ -236,7 +239,21 @@ function planTransfer() {
   cityToCenter(city).then(ll => { cityCenterCache[city] = ll; doTransfer(ll, dest); })
     .catch(() => toast('城市解析失败，请检查城市名'));
 }
+function keyErrorHint(status) {
+  // 把高德常见错误码翻译成大白话，方便对症处理
+  const s = (status || '').toUpperCase();
+  if (s.includes('SCODE') || s.includes('KEY') || s.includes('NOMATCH') || s.includes('DOMAIN'))
+    return '（多是高德 Key 白名单限制：去高德后台把该 Key 的「域名白名单」设为 *.github.io 或先清空测试）';
+  if (s.includes('QUOTA') || s.includes('LIMIT'))
+    return '（可能是 Key 免费额度用尽，去高德控制台查看用量）';
+  return '（' + status + '）';
+}
+
 function doTransfer(start, dest) {
+  if (!navigator.onLine) {
+    $('routePanel').innerHTML = '<p class="hint">当前无网络，请连网后重试。</p>';
+    toast('无网络'); return;
+  }
   $('routePanel').innerHTML = '<p class="hint">规划中…（最长约 20 秒）</p>';
   let done = false;
   const timer = setTimeout(() => {
@@ -262,7 +279,7 @@ function doTransfer(start, dest) {
       } else if (status === 'no_data') {
         $('routePanel').innerHTML = '<p class="hint">该目的地暂无公交/地铁路线，试试别的目的地。</p>';
       } else {
-        $('routePanel').innerHTML = '<p class="hint">规划失败（' + status + '），换个目的地或稍后再试。</p>';
+        $('routePanel').innerHTML = '<p class="hint">规划失败 ' + keyErrorHint(status) + '。换个目的地或稍后再试。</p>';
         toast('路线规划失败');
       }
     });

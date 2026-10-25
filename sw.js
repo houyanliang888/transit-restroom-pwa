@@ -1,7 +1,7 @@
 /* 出行助手 PWA 离线缓存
  * 策略：网络优先，失败回退到缓存（保证 App 界面离线可开；地图数据仍需联网）
  */
-const CACHE = 'transit-pwa-v3-logo';
+const CACHE = 'transit-pwa-v4-fix';
 const ASSETS = [
   './',
   './index.html',

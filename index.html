@@ -82,8 +82,8 @@
     </div>
   </section>
 
-  <!-- 附近子菜单（内嵌模式） -->
-  <div id="nearbyMenu" class="nearby-menu hidden">
+  <!-- 附近子菜单（内嵌模式）。注意：不能用 .hidden（display:none!important）控制显隐，否则 .open 的 transform 展开永远被压住，菜单弹不出来 -->
+  <div id="nearbyMenu" class="nearby-menu">
     <button data-kw="公共厕所" data-color="wc">🚻<span>公厕</span></button>
     <button data-kw="公交站" data-color="bus">🚌<span>公交站</span></button>
     <button data-kw="地铁站" data-color="metro">🚇<span>地铁站</span></button>
