@@ -420,7 +420,7 @@ function searchLine() {
     wsLineQuery(name, city).then(res => {
       if (!res || !res.stations || !res.stations.length) { toast('未找到「' + name + '」，确认线路名或城市'); return; }
       clearOverlays();
-      const color = (res.name || '').includes('地铁') ? COLORS.metro : COLORS.bus;
+      const color = ((res.name || '') + (res.type || '')).includes('地铁') ? COLORS.metro : COLORS.bus;
       if (res.polyline && res.polyline.length) {
         try {
           const poly = new AMap.Polyline({ path: res.polyline, strokeColor: color, strokeWeight: 6, strokeOpacity: 0.85, zIndex: 8 });
@@ -428,7 +428,11 @@ function searchLine() {
         } catch (e) {}
       }
       res.stations.forEach(s => addMarker(s.loc, s.name, color));
-      renderList(res.stations.map((s, i) => ({ name: (i + 1) + '. ' + s.name, addr: res.name || name, dist: '', loc: s.loc })));
+      renderList(res.stations.map((s, i) => ({
+        name: (i + 1) + '. ' + s.name,
+        addr: (res.startStop ? '始：' + res.startStop + '　' : '') + (res.endStop ? '终：' + res.endStop : ''),
+        dist: '', loc: s.loc,
+      })));
       if (overlays.length) try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
       openSheet((res.name || name) + '（' + res.stations.length + ' 站）');
     }).catch(err => {
@@ -451,7 +455,10 @@ function wsLineQuery(name, city) {
     const lines = d.buslines || (d.result && d.result.buslines) || [];
     if (!lines.length) return null;
     const line = lines[0];
-    const st = (line.stations || []).map(s => ({ name: s.name, loc: parseLoc(s.location) })).filter(x => x.loc);
+    // 站点字段是 busstops（不是 stations），含 id/location/name/sequence
+    const st = (line.busstops || line.stations || [])
+      .map(s => ({ name: s.name, loc: parseLoc(s.location) }))
+      .filter(x => x.loc && x.name);
     // polyline 解析全程走向
     const poly = [];
     if (line.polyline) {
@@ -463,15 +470,22 @@ function wsLineQuery(name, city) {
         }
       });
     }
-    // 没有站点时，用 polyline 的首尾点兜底
+    // 没有站点时，用 polyline 首尾点兜底
     let stations = st;
     if (!stations.length && poly.length) {
       stations = [
-        { name: '起点', loc: poly[0] },
-        { name: '终点', loc: poly[poly.length - 1] },
+        { name: line.start_stop || '起点', loc: poly[0] },
+        { name: line.end_stop || '终点', loc: poly[poly.length - 1] },
       ];
     }
-    return { name: line.name, stations: stations, polyline: poly };
+    return {
+      name: line.name,
+      stations: stations,
+      polyline: poly,
+      startStop: line.start_stop,
+      endStop: line.end_stop,
+      type: line.type,
+    };
   });
 }
 function showNearbyFallback(keyword, center, err) {
@@ -540,18 +554,18 @@ function wsFallbackRoute(start, dest) {
         // 公交段
         const buslines = (s.bus && s.bus.buslines) || [];
         buslines.forEach(b => {
-          const names = (b.lines || []).map(l => l.name).filter(Boolean).join('/') || b.name || '公交';
-          const stopCount = (b.stops || []).length;
-          segs += '🚌 ' + names + (stopCount ? '（' + stopCount + ' 站）' : '') + '<br/>';
+          // Web API：线路名在 b.name，站点数在 b.via_num，首末站在 departure_stop/arrival_stop
+          const names = b.name || (b.lines || []).map(l => l.name).filter(Boolean).join('/') || '公交';
+          const stopCount = b.via_num || (b.stops || b.busstops || []).length || 0;
+          segs += '🚌 ' + names + (stopCount ? '（' + stopCount + ' 站）' : '')
+            + (b.departure_stop ? '　' + b.departure_stop + ' → ' + (b.arrival_stop || '') : '') + '<br/>';
           if (b.polyline) b.polyline.split(';').forEach(pt => {
             const a = pt.split(',');
             if (a.length >= 2) path.push([parseFloat(a[0]), parseFloat(a[1])]);
           });
-          (b.stops || []).forEach(st => {
-            if (st.location) {
-              const loc = parseLoc(st.location);
-              if (loc) path.push(loc);
-            }
+          (b.stops || b.busstops || []).forEach(st => {
+            const loc = parseLoc(st.location);
+            if (loc) path.push(loc);
           });
         });
       });
