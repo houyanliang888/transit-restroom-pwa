@@ -348,6 +348,7 @@ function doTransfer(start, dest) {
       } else {
         // 规划失败 → 若已配 Web 服务 Key，改走备用通道
         if (webKey()) { wsFallbackRoute(start, dest); return; }
+        markWsFailed();
         $('routePanel').innerHTML = '<p class="hint">规划失败 ' + keyErrorHint(status) + '。换个目的地或稍后再试。</p>'
           + '<button class="li-go" id="btnFallbackNav" style="width:100%;margin-top:8px">改用手机地图规划这条路线</button>';
         const b = document.getElementById('btnFallbackNav');
@@ -384,6 +385,7 @@ function searchLine() {
     lineDone = true;
     clearTimeout(lineTimer);
     if (status !== 'complete' || !res.lineInfo || !res.lineInfo.length) {
+      markWsFailed();
       toast('未找到「' + name + '」，确认线路名或城市'); return;
     }
     const info = res.lineInfo[0];
@@ -434,6 +436,7 @@ function wsLineQuery(name, city) {
   });
 }
 function showNearbyFallback(keyword, center, err) {
+  markWsFailed();
   const ul = $('resultList');
   ul.innerHTML = '<li class="hint">搜索失败' + keyErrorHint((err && err.message) || 'error') + '</li>';
   const li = document.createElement('li');
@@ -809,6 +812,26 @@ function wsTransit(start, dest, city) {
     if (!d || d.status !== '1') throw new Error((d && d.info) || '规划失败');
     return d;
   });
+}
+
+/* ================= 智能降级 =================
+ * 若高德 Key 存在但服务端接口全线失败（白名单未生效 / Key 未被接受 / 额度耗尽），
+ * 自动降级为「跳手机地图」可用状态 —— 保证推广给陌生人时不会点了没反应。
+ */
+let wsFailStreak = 0;   // 连续失败次数
+function markWsFailed() {
+  wsFailStreak++;
+  if (wsFailStreak >= 2 && mode === 'embed') {
+    toast('高德接口不可用，已切换为手机地图模式', 4000);
+    degradeToLite();
+  }
+}
+function degradeToLite() {
+  mode = 'lite';
+  try { $('litePanel').classList.remove('hidden'); } catch (e) {}
+  try { $('map').style.display = 'none'; } catch (e) {}
+  try { $('providerSel').value = provider(); } catch (e) {}
+  updateCityTag();
 }
 
 /* ================= 启动 ================= */
