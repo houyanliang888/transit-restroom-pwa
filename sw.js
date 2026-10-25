@@ -1,7 +1,9 @@
 /* 出行助手 PWA 离线缓存
  * 策略：网络优先，失败回退到缓存（保证 App 界面离线可开；地图数据仍需联网）
+ * 重要：只有「页面导航请求」失败才回退到首页 HTML；
+ *      JS/CSS 等资源失败绝不回退到 HTML——否则 HTML 会被浏览器当 JS 执行，整个应用崩溃（表现为所有按钮无反应）。
  */
-const CACHE = 'transit-pwa-v4-fix';
+const CACHE = 'transit-pwa-v5-robust';
 const ASSETS = [
   './',
   './index.html',
@@ -33,6 +35,10 @@ self.addEventListener('fetch', (e) => {
     return;
   }
   e.respondWith(
-    fetch(e.request).catch(() => caches.match(e.request).then((r) => r || caches.match('./')))
+    fetch(e.request).catch(() => {
+      // 仅页面导航失败才回退首页；其他资源失败就明确失败，绝不能拿 HTML 冒充 JS
+      if (e.request.mode === 'navigate') return caches.match('./');
+      return caches.match(e.request).then((r) => r || Response.error());
+    })
   );
 });

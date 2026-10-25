@@ -7,6 +7,6 @@ import segno
 # 部署后的公开地址（GitHub Pages 子路径）
 URL = "https://houyanliang888.github.io/transit-restroom-pwa/"
 
-qr = segno.make(URL, error="m")  # error='m' 中等纠错，脏污仍可扫
-qr.save("qrcode.png", scale=10, border=4)
+qr = segno.make(URL, error="h")  # error='h' 高纠错，手机小屏/印刷更易扫
+qr.save("qrcode.png", scale=12, border=4)
 print("已生成 qrcode.png ->", URL)

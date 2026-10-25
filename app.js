@@ -92,8 +92,9 @@ function loadAMap(key, sec) {
     const s = document.createElement('script');
     s.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(key)}`
           + `&plugin=AMap.PlaceSearch,AMap.Transfer,AMap.LineSearch,AMap.Geocoder,AMap.Geolocation`;
-    s.onload = () => (window.AMap ? resolve(window.AMap) : reject(new Error('AMap 未就绪')));
-    s.onerror = () => reject(new Error('高德脚本加载失败'));
+    const timer = setTimeout(() => reject(new Error('加载超时（15秒）')), 15000);
+    s.onload = () => { clearTimeout(timer); window.AMap ? resolve(window.AMap) : reject(new Error('AMap 未就绪')); };
+    s.onerror = () => { clearTimeout(timer); reject(new Error('高德脚本加载失败')); };
     document.head.appendChild(s);
   });
 }
@@ -514,15 +515,32 @@ function bindAll() {
 }
 
 /* ================= 启动 ================= */
+/* 全局错误兜底：任何脚本错误都提示出来，避免"点了没反应"却无从排查 */
+window.addEventListener('error', (e) => {
+  try { toast('脚本出错：' + (e.message || '未知') + '，请刷新重试', 5000); } catch (_) {}
+});
+
+let bound = false;
+function ensureBind() {
+  if (bound) return;
+  bound = true;
+  try { bindAll(); }
+  catch (err) { try { toast('界面初始化出错：' + (err.message || err), 5000); } catch (_) {} }
+}
+
 async function boot() {
   const key = localStorage.getItem(STORE_KEY) || DEFAULT_AMAP_KEY;
   const sec = localStorage.getItem(SEC_KEY) || DEFAULT_AMAP_SEC;
-  if (key) {
-    try { AMap = await loadAMap(key, sec); initMap(); bindAll(); return; }
-    catch (e) { /* Key 失效则降级临时模式 */ toast('Key 加载失败，进入临时版'); }
+  try {
+    AMap = await loadAMap(key, sec);   // loadAMap 内置 15 秒超时，不会永远挂起
+    initMap();
+  } catch (e) {
+    /* Key 失效/断网则降级临时模式 */
+    toast('地图加载失败，进入临时版（' + (e.message || '原因未知') + '）', 4000);
+    enterLite();
+  } finally {
+    ensureBind();                      // 无论如何都保证按钮事件被绑定
   }
-  enterLite();
-  bindAll();
 }
 
 boot();
