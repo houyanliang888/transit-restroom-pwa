@@ -107,10 +107,12 @@
         1. 打开 <a href="https://lbs.amap.com/" target="_blank" rel="noopener">lbs.amap.com</a> → 用手机号注册<br/>
         2. 控制台 → 右上角「<b>创建应用</b>」→ 应用类型选「<b>Web端(JS API)</b>」<br/>
         3. 应用里点「<b>添加 Key</b>」，服务平台选「<b>Web端(JS API)</b>」，提交即得<br/>
-        4. 把 Key 粘贴到下面保存。Key 只存在你手机本地，不会上传。<br/><br/>
+        4. 提交后页面会显示一串 <b>安全密钥</b>（securityJsCode），也要填到下面的「安全密钥」框——<b>JS API 2.0 必填，漏了地图白屏</b><br/>
+        5. 把 Key + 安全密钥都粘贴到下面保存。仅存在你手机本地，不会上传。<br/><br/>
         <b>提示</b>：个人开发者需做一下「个人认证」（支付宝扫码，0 元）。若注册时卡住，把页面截图发我。
       </p>
       <input id="keyInput" type="text" placeholder="粘贴高德 Key" />
+      <input id="secInput" type="text" placeholder="粘贴安全密钥（JS API 2.0 必填，否则白屏）" style="margin-top:10px;" />
       <div class="modal-actions">
         <button id="btnHelp" class="ghost">使用说明</button>
         <button id="btnSaveKey" class="primary">保存并加载</button>

@@ -7,6 +7,7 @@
  */
 
 const STORE_KEY = 'amap_key_v1';
+const SEC_KEY   = 'amap_sec_v1';   // 高德 JS API 2.0 安全密钥（securityJsCode），不配地图白屏
 const CITY_KEY  = 'last_city_v1';
 const SELCITY_KEY = 'selected_city_v1';
 const PROV_KEY  = 'map_provider_v1';
@@ -78,9 +79,11 @@ function toast(msg, ms = 1800) {
 }
 
 /* ================= 内嵌模式（embed，填了 Key） ================= */
-function loadAMap(key) {
+function loadAMap(key, sec) {
   return new Promise((resolve, reject) => {
     if (window.AMap) return resolve(window.AMap);
+    // JS API 2.0 必须在加载脚本前设置安全密钥，否则报 INVALID_USER_SCODE 白屏
+    if (sec) window._AMapSecurityConfig = { securityJsCode: sec };
     const s = document.createElement('script');
     s.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(key)}`
           + `&plugin=AMap.PlaceSearch,AMap.Transfer,AMap.LineSearch,AMap.Geocoder,AMap.Geolocation`;
@@ -365,6 +368,7 @@ function showBox(which) {
 }
 function openSettings() {
   $('keyInput').value = localStorage.getItem(STORE_KEY) || '';
+  $('secInput').value = localStorage.getItem(SEC_KEY) || '';
   $('settingsModal').classList.remove('hidden');
 }
 function setActive(id) {
@@ -378,7 +382,9 @@ function bindAll() {
   $('btnSaveKey').addEventListener('click', () => {
     const k = $('keyInput').value.trim();
     if (!k) { toast('请输入 Key'); return; }
+    const s = $('secInput').value.trim();
     localStorage.setItem(STORE_KEY, k);
+    if (s) localStorage.setItem(SEC_KEY, s); else localStorage.removeItem(SEC_KEY);
     $('settingsModal').classList.add('hidden');
     location.reload();
   });
@@ -438,8 +444,9 @@ function bindAll() {
 /* ================= 启动 ================= */
 async function boot() {
   const key = localStorage.getItem(STORE_KEY);
+  const sec = localStorage.getItem(SEC_KEY) || '';
   if (key) {
-    try { AMap = await loadAMap(key); initMap(); bindAll(); return; }
+    try { AMap = await loadAMap(key, sec); initMap(); bindAll(); return; }
     catch (e) { /* Key 失效则降级临时模式 */ toast('Key 加载失败，进入临时版'); }
   }
   enterLite();
