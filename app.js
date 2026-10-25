@@ -436,32 +436,42 @@ function searchLine() {
     });
   }
 }
-/* Web 服务 API：查线路站点 + 全程走向 */
+/* Web 服务 API：查线路站点 + 全程走向
+ * 注意：extensions=all 时 buslines 在返回体顶层（不是 result.buslines）；
+ *       location 字段是字符串 "lng,lat"，需 parseLoc 解析。 */
 function wsLineQuery(name, city) {
   const k = webKey();
   if (!k) return Promise.reject(new Error('NO_WEB_KEY'));
   const url = 'https://restapi.amap.com/v3/bus/linename?key=' + encodeURIComponent(k)
     + '&city=' + encodeURIComponent(city || '')
     + '&keywords=' + encodeURIComponent(name)
-    + '&extensions=base';
-  return jsonp(url).then(d => {
+    + '&extensions=all';
+  return jsonp(url, 15000).then(d => {
     if (!d || d.status !== '1') throw new Error((d && d.info) || '线路查询失败');
-    const lines = (d.result && d.result.buslines) || [];
+    const lines = d.buslines || (d.result && d.result.buslines) || [];
     if (!lines.length) return null;
     const line = lines[0];
-    const st = (line.stations || []);
+    const st = (line.stations || []).map(s => ({ name: s.name, loc: parseLoc(s.location) })).filter(x => x.loc);
+    // polyline 解析全程走向
     const poly = [];
     if (line.polyline) {
       line.polyline.split(';').forEach(pt => {
         const a = pt.split(',');
-        if (a.length >= 2) poly.push([parseFloat(a[0]), parseFloat(a[1])]);
+        if (a.length >= 2) {
+          const lng = parseFloat(a[0]), lat = parseFloat(a[1]);
+          if (!isNaN(lng) && !isNaN(lat)) poly.push([lng, lat]);
+        }
       });
     }
-    return {
-      name: line.name,
-      stations: st.map(s => ({ name: s.name, loc: [s.location.lng, s.location.lat] })),
-      polyline: poly,
-    };
+    // 没有站点时，用 polyline 的首尾点兜底
+    let stations = st;
+    if (!stations.length && poly.length) {
+      stations = [
+        { name: '起点', loc: poly[0] },
+        { name: '终点', loc: poly[poly.length - 1] },
+      ];
+    }
+    return { name: line.name, stations: stations, polyline: poly };
   });
 }
 function showNearbyFallback(keyword, center, err) {
@@ -496,15 +506,17 @@ function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-/* 备用通道：Web 服务 API 规划路线（已实测可用，不受域名白名单限制） */
+/* 备用通道：Web 服务 API 规划路线（已实测可用，不受域名白名单限制）
+ * 返回结构要点：d.route.transits[] → segments[] →
+ *   公交信息在 segment.bus.buslines[]（含 name/polyline/stops）
+ *   步行路径在 segment.walking.steps[].polyline
+ */
 function wsFallbackRoute(start, dest) {
   const city = selectedCity || currentCity || '';
   $('routePanel').innerHTML = '<p class="hint">规划中…</p>';
-  // 目的地先地理编码成坐标（走 Web 通道，不依赖高德 JS 地理编码接口）
   wsGeocode(dest).then(to => {
     return wsTransit(start, to, city).then(d => ({ d: d, to: to }));
   }).then(({ d, to }) => {
-    // Web 服务 API 的结构：d.route.transits[]
     const plans = (d.route && d.route.transits) || [];
     if (!plans.length) {
       $('routePanel').innerHTML = '<p class="hint">未找到合适路线，试试更具体的地名（如「长治东站」）。</p>';
@@ -512,38 +524,54 @@ function wsFallbackRoute(start, dest) {
     }
     let html = '';
     plans.slice(0, 3).forEach(p => {
-      const segs = (p.segments || []).map(s => {
-        const line = (s.transit && s.transit.lines || []).map(l => l.name).join('/');
-        const walk = s.walking ? Math.round((s.walking.distance || 0) / 1000 * 10) / 10 : 0;
-        return (line ? '【' + line + '】' : '步行') + (walk ? ' ' + walk + '公里' : '') + ' → ' + (s.instruction || '');
-      }).join('<br/>');
+      let segs = '';
+      let path = [];
+      (p.segments || []).forEach(s => {
+        // 步行段
+        const steps = (s.walking && s.walking.steps) || [];
+        const walkDist = s.walking ? Math.round((s.walking.distance || 0) / 10) : 0;
+        steps.forEach(st => {
+          if (st.polyline) st.polyline.split(';').forEach(pt => {
+            const a = pt.split(',');
+            if (a.length >= 2) path.push([parseFloat(a[0]), parseFloat(a[1])]);
+          });
+        });
+        if (walkDist > 30) segs += '🚶 步行约 ' + (walkDist / 100) + ' 公里<br/>';
+        // 公交段
+        const buslines = (s.bus && s.bus.buslines) || [];
+        buslines.forEach(b => {
+          const names = (b.lines || []).map(l => l.name).filter(Boolean).join('/') || b.name || '公交';
+          const stopCount = (b.stops || []).length;
+          segs += '🚌 ' + names + (stopCount ? '（' + stopCount + ' 站）' : '') + '<br/>';
+          if (b.polyline) b.polyline.split(';').forEach(pt => {
+            const a = pt.split(',');
+            if (a.length >= 2) path.push([parseFloat(a[0]), parseFloat(a[1])]);
+          });
+          (b.stops || []).forEach(st => {
+            if (st.location) {
+              const loc = parseLoc(st.location);
+              if (loc) path.push(loc);
+            }
+          });
+        });
+      });
       const mins = p.duration ? Math.round(p.duration / 60) : (p.time || '?');
       const km = Math.round((p.distance || 0) / 100) / 10;
       html += '<div style="border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:8px">'
         + '<b>' + mins + ' 分钟 · ' + km + ' 公里</b><br/>'
-        + '<span style="font-size:12px;color:#475569;line-height:1.7">' + segs + '</span></div>';
-      // 在地图上画出该方案的路径
+        + '<span style="font-size:12px;color:#475569;line-height:1.8">' + (segs || '直达') + '</span></div>';
+      // 地图画线
       try {
-        const path = [];
-        (p.segments || []).forEach(s => {
-          if (s.walking && s.walking.polyline) {
-            s.walking.polyline.split(';').forEach(pt => { const a = pt.split(','); if (a.length >= 2) path.push([parseFloat(a[0]), parseFloat(a[1])]); });
-          }
-          if (s.transit && s.transit.polyline) {
-            s.transit.polyline.split(';').forEach(pt => { const a = pt.split(','); if (a.length >= 2) path.push([parseFloat(a[0]), parseFloat(a[1])]); });
-          }
-        });
         if (path.length > 1) {
           const poly = new AMap.Polyline({ path: path, strokeColor: COLORS.bus, strokeWeight: 7, strokeOpacity: 0.9, zIndex: 9 });
           map.add(poly); overlays.push(poly);
-          const pts = [[start[0], start[1]], [to[0], to[1]]];
-          const mk = new AMap.Marker({ position: pts[1], title: dest, offset: new AMap.Pixel(-15, -32), content: pinHTML(COLORS.bus, dest), zIndex: 12 });
+          const mk = new AMap.Marker({ position: [to[0], to[1]], title: dest, offset: new AMap.Pixel(-15, -32), content: pinHTML(COLORS.bus, dest), zIndex: 12 });
           map.add(mk); overlays.push(mk);
-          map.setFitView(overlays, false, [60, 60, 60, 60]);
         }
       } catch (e) {}
     });
     $('routePanel').innerHTML = html;
+    try { map.setFitView(overlays, false, [60, 60, 60, 60]); } catch (e) {}
   }).catch(err => {
     $('routePanel').innerHTML = '<p class="hint">规划失败' + keyErrorHint((err && err.message) || 'error') + '。</p>'
       + '<button class="li-go" id="btnFallbackNav" style="width:100%;margin-top:8px">改用手机地图规划这条路线</button>';
@@ -820,18 +848,33 @@ function jsonp(url, timeout = 12000) {
   });
 }
 
-/* POI 类型码：让搜索结果更精准（纯关键词搜索会混入住宅区等无关 POI） */
+/* POI 类型码：经实测「公交站/地铁站」用类型码查不到，改用关键词更可靠（返回名称带"(公交站)"后缀）
+ * 公共厕所用 types=120302 精确匹配（纯关键词会混入住宅区） */
 const POI_TYPES = {
   '公共厕所': '120302',
-  '公交站': '150100',
-  '地铁站': '150200',
 };
+
+/* 兼容高德 location 字段：extensions=base 时是字符串 "lng,lat"，all 时是对象 */
+function parseLoc(loc) {
+  if (!loc) return null;
+  if (typeof loc === 'string') {
+    const a = loc.split(',');
+    if (a.length >= 2) {
+      const lng = parseFloat(a[0]), lat = parseFloat(a[1]);
+      if (!isNaN(lng) && !isNaN(lat)) return [lng, lat];
+    }
+    return null;
+  }
+  if (typeof loc.lng === 'number' && typeof loc.lat === 'number') return [loc.lng, loc.lat];
+  return null;
+}
 
 /* Web 服务 API：周边搜索 */
 function wsPlaceAround(keyword, center, radius) {
   const k = webKey();
   if (!k) return Promise.reject(new Error('NO_WEB_KEY'));
   const types = POI_TYPES[keyword];
+  const city = selectedCity || currentCity || '';
   let url = 'https://restapi.amap.com/v3/place/around'
     + '?key=' + encodeURIComponent(k)
     + '&location=' + center[0] + ',' + center[1]
@@ -840,6 +883,7 @@ function wsPlaceAround(keyword, center, radius) {
     url += '&types=' + types;
   } else {
     url += '&keywords=' + encodeURIComponent(keyword);
+    if (city) url += '&city=' + encodeURIComponent(city);
   }
   return jsonp(url).then(d => {
     if (!d || d.status !== '1') throw new Error((d && d.info) || '搜索失败');
@@ -847,8 +891,8 @@ function wsPlaceAround(keyword, center, radius) {
       name: p.name,
       addr: p.address || '',
       dist: p.distance,
-      loc: [p.location.lng, p.location.lat],
-    }));
+      loc: parseLoc(p.location),
+    })).filter(x => x.loc);
   });
 }
 /* Web 服务 API：地理编码 */
@@ -859,8 +903,9 @@ function wsGeocode(addr) {
     + '&address=' + encodeURIComponent(addr);
   return jsonp(url).then(d => {
     if (!d || d.status !== '1' || !d.geocodes || !d.geocodes.length) throw new Error((d && d.info) || '地理编码失败');
-    const l = d.geocodes[0].location;
-    return [l.lng, l.lat];
+    const loc = parseLoc(d.geocodes[0].location);
+    if (!loc) throw new Error('地理编码结果异常');
+    return loc;
   });
 }
 /* Web 服务 API：公交路径规划 */
@@ -873,7 +918,7 @@ function wsTransit(start, dest, city) {
     + '&destination=' + dest[0] + ',' + dest[1]
     + '&city=' + encodeURIComponent(city || '')
     + '&cityd=' + encodeURIComponent(city || '')
-    + '&strategy=0&extensions=base';
+    + '&strategy=0&extensions=all';
   return jsonp(url).then(d => {
     if (!d || d.status !== '1') throw new Error((d && d.info) || '规划失败');
     return d;
