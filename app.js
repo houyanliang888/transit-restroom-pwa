@@ -533,6 +533,7 @@ function bindAll() {
   });
   $('btnHelp').addEventListener('click', () => $('helpModal').classList.remove('hidden'));
   $('btnHelpClose').addEventListener('click', () => $('helpModal').classList.add('hidden'));
+  $('btnSelfCheck').addEventListener('click', runSelfCheck);
   $('sheetClose').addEventListener('click', closeSheet);
   $('providerSel').addEventListener('change', () => localStorage.setItem(PROV_KEY, $('providerSel').value));
 
@@ -582,6 +583,58 @@ function bindAll() {
     else if (v) openMapSearch(v); else toast('请输入线路名');
   });
   $('lineInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnLineQuery').click(); });
+}
+
+/* ================= 接口自检（诊断高德 Key / 白名单是否通） ================= */
+function wsProbe(path, params, cb) {
+  // 直接调高德 Web 服务接口，读取真实返回码（用于判断白名单/Key 状态）
+  const url = 'https://restapi.amap.com/' + path + '?' + Object.keys(params)
+    .map(k => k + '=' + encodeURIComponent(params[k])).join('&');
+  fetch(url, { referrer: location.href }).then(r => r.json()).then(cb).catch(() => cb({ status: '0', info: 'NETWORK_FAIL' }));
+}
+function runSelfCheck() {
+  const box = $('selfCheckBox');
+  box.classList.remove('hidden');
+  box.innerHTML = '<p class="hint">检测中…（约 5 秒）</p>';
+  const key = (localStorage.getItem(STORE_KEY) || DEFAULT_AMAP_KEY).trim();
+  const sec = (localStorage.getItem(SEC_KEY) || DEFAULT_AMAP_SEC).trim();
+  const rows = [];
+
+  // ① Web端(JS API) Key 是否可用
+  wsProbe('v3/log/init', { key: key, jscode: sec, s: 'rsv3', product: 'JsInit', platform: '' }, (d) => {
+    rows.push({
+      name: '① JS API Key 鉴权',
+      ok: d && d.status === '1',
+      msg: d && d.status === '1' ? '✓ 通过（Key 与安全密钥有效）'
+          : '✗ ' + (d && d.info || '未知') + (d && d.infocode ? '（' + d.infocode + '）' : ''),
+      fix: (d && d.status !== '1') ? 'Key 或安全密钥不匹配 / 已失效 → 去高德控制台检查，或重新生成一份 Key + 安全密钥' : ''
+    });
+    step2();
+  });
+
+  // ② 业务接口（受域名白名单管控）
+  function step2() {
+    wsProbe('v3/geocode/geo', { key: key, jscode: sec, address: '长治' }, (d) => {
+      const ok = d && d.status === '1';
+      rows.push({
+        name: '② 地理编码 / 附近搜索 / 路线',
+        ok: ok,
+        msg: ok ? '✓ 通过（白名单已生效，功能可用）'
+                : '✗ ' + (d && d.info || '未知') + (d && d.infocode ? '（' + d.infocode + '）' : ''),
+        fix: ok ? '' : '此接口受「域名白名单」管控：高德控制台 → 该 Key → 域名白名单，填 houyanliang888.github.io（不带 https:// 和路径），保存后等 5–30 分钟再测'
+      });
+      render();
+    });
+  }
+  function render() {
+    box.innerHTML = rows.map(r =>
+      `<div style="border:1px solid ${r.ok ? '#16a34a' : '#ef4444'};border-radius:10px;padding:10px;margin-bottom:8px;font-size:13px">
+        <div style="font-weight:700;color:${r.ok ? '#16a34a' : '#dc2626'};margin-bottom:4px">${r.name}</div>
+        <div>${r.msg}</div>
+        ${r.fix ? '<div style="margin-top:6px;color:#64748b;line-height:1.6">' + r.fix + '</div>' : ''}
+      </div>`).join('')
+      + '<p class="hint">提示：白名单修改后高德需 5–30 分钟同步，期间接口仍会返回 INVALID_USER_KEY，属正常现象。</p>';
+  }
 }
 
 /* ================= 启动 ================= */
