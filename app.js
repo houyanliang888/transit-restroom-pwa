@@ -555,7 +555,10 @@ function openMapSearch(kw) {
   toast('已用' + p.name + (city ? '（' + city + '）' : '（当前位置）') + '搜索：' + kw);
 }
 function openMapNav() {
-  const dest = $('destInput').value.trim();
+  // 优先读路线面板（embed 面板）里用户刚输入的目的地，再退回 lite 面板
+  const d2 = ($('destInput2') && $('destInput2').value || '').trim();
+  const d1 = ($('destInput') && $('destInput').value || '').trim();
+  const dest = d2 || d1;
   if (!dest) { toast('请输入目的地'); return; }
   const p = PROVIDERS[provider()];
   window.open(p.search(dest, null), '_blank');
@@ -831,6 +834,12 @@ function degradeToLite() {
   try { $('litePanel').classList.remove('hidden'); } catch (e) {}
   try { $('map').style.display = 'none'; } catch (e) {}
   try { $('providerSel').value = provider(); } catch (e) {}
+  // 降级时把引导文案改成"接口暂不可用"，避免误导
+  try {
+    $('liteBadge') && ($('liteBadge').textContent = '手机地图模式 · 功能可用');
+    $('liteTip') && ($('liteTip').innerHTML = '📡 高德接口暂时不可用，已自动切换为<strong>手机地图模式</strong>：下方三个按钮会直接在你的地图 App 里搜索并显示结果，功能一样，只是多跳一步。');
+    $('liteStatus') && ($('liteStatus').textContent = '点击下方按钮开始使用');
+  } catch (e) {}
   updateCityTag();
 }
 
