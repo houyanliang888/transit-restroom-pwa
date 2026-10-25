@@ -8,6 +8,7 @@
 
 const STORE_KEY = 'amap_key_v1';
 const SEC_KEY   = 'amap_sec_v1';   // 高德 JS API 2.0 安全密钥（securityJsCode），不配地图白屏
+const WS_KEY_STORE = 'amap_web_key_v1';  // 备用通道：Web服务 API Key（不受域名白名单限制）
 const CITY_KEY  = 'last_city_v1';
 const SELCITY_KEY = 'selected_city_v1';
 const PROV_KEY  = 'map_provider_v1';
@@ -259,15 +260,19 @@ function doNearby(keyword, colorKey, center) {
     clearTimeout(timer);
     if (status !== 'complete' || !res.poiList || !res.poiList.pois.length) {
       if (status !== 'complete') {
-        // 高德接口失败（多为白名单/额度）→ 给一键跳手机地图的出路
-        const ul = $('resultList');
-        ul.innerHTML = '<li class="hint">搜索失败' + keyErrorHint(status) + '</li>';
-        const li = document.createElement('li');
-        li.innerHTML = '<button class="li-go" style="width:100%">改用手机地图搜索「' + escapeHTML(keyword) + '」</button>';
-        li.querySelector('button').addEventListener('click', () => openMapSearch(keyword));
-        ul.appendChild(li);
-        openSheet(keyword + '（搜索失败）');
-        toast('搜索失败' + keyErrorHint(status));
+        // JS 通道失败 → 自动切备用通道（Web 服务 API），再不行才给跳地图按钮
+        if (webKey()) {
+          wsPlaceAround(keyword, center, 2000).then(items => {
+            if (!items.length) { toast('附近 2 公里内未找到「' + keyword + '」'); return; }
+            const color = COLORS[colorKey] || COLORS.bus;
+            items.forEach(it => addMarker(it.loc, it.name, color));
+            renderList(items);
+            try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
+            openSheet(keyword + '（' + items.length + '）');
+          }).catch(err => showNearbyFallback(keyword, center, err));
+        } else {
+          showNearbyFallback(keyword, center, new Error(status));
+        }
       } else {
         toast('附近 2 公里内未找到「' + keyword + '」');
       }
@@ -341,6 +346,8 @@ function doTransfer(start, dest) {
       } else if (status === 'no_data') {
         $('routePanel').innerHTML = '<p class="hint">该目的地暂无公交/地铁路线，试试别的目的地。</p>';
       } else {
+        // 规划失败 → 若已配 Web 服务 Key，改走备用通道
+        if (webKey()) { wsFallbackRoute(start, dest); return; }
         $('routePanel').innerHTML = '<p class="hint">规划失败 ' + keyErrorHint(status) + '。换个目的地或稍后再试。</p>'
           + '<button class="li-go" id="btnFallbackNav" style="width:100%;margin-top:8px">改用手机地图规划这条路线</button>';
         const b = document.getElementById('btnFallbackNav');
@@ -362,17 +369,17 @@ function doTransfer(start, dest) {
 function searchLine() {
   const name = $('lineInput').value.trim();
   if (!name) { toast('请输入线路名，如 地铁1号线 / 1路'); return; }
-  if (!lineSearch) { toast('线路查询模块未加载（多为 Key 白名单限制）'); return; }
+  if (!lineSearch && !webKey()) { toast('线路查询模块未加载（多为 Key 白名单限制）'); return; }
   const city = selectedCity || currentCity;
   if (!city) { toast('请先定位或选择城市'); return; }
-  try { lineSearch.setCity(city); } catch (e) {}
+  try { if (lineSearch) lineSearch.setCity(city); } catch (e) {}
   let lineDone = false;
   const lineTimer = setTimeout(() => {
     if (lineDone) return;
     lineDone = true;
     toast('查询超时' + keyErrorHint('timeout'));
   }, 15000);
-  lineSearch.search(name, (status, res) => {
+  const onLine = (status, res) => {
     if (lineDone) return;
     lineDone = true;
     clearTimeout(lineTimer);
@@ -392,7 +399,49 @@ function searchLine() {
     renderList(stations.map((s, i) => ({ name: (i + 1) + '. ' + s.name, addr: info.name, dist: '', loc: [s.location.lng, s.location.lat] })));
     if (overlays.length) try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
     openSheet(info.name + '（' + stations.length + ' 站）');
+  };
+  if (lineSearch) {
+    lineSearch.search(name, onLine);
+  } else {
+    // 无 JS 通道 → 用 Web 服务 API 查线路（以站点列表形式展示）
+    wsLineQuery(name, city).then(stations => {
+      if (!stations.length) { toast('未找到「' + name + '」，确认线路名或城市'); return; }
+      clearOverlays();
+      stations.forEach(s => addMarker(s.loc, s.name, COLORS.bus));
+      renderList(stations.map((s, i) => ({ name: (i + 1) + '. ' + s.name, addr: name, dist: '', loc: s.loc })));
+      if (overlays.length) try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
+      openSheet(name + '（' + stations.length + ' 站）');
+    }).catch(err => {
+      if (lineDone) return; lineDone = true; clearTimeout(lineTimer);
+      toast('查询失败' + keyErrorHint((err && err.message) || 'error'));
+    });
+  }
+}
+/* Web 服务 API：查线路站点 */
+function wsLineQuery(name, city) {
+  const k = webKey();
+  if (!k) return Promise.reject(new Error('NO_WEB_KEY'));
+  const url = 'https://restapi.amap.com/v3/bus/linename?key=' + encodeURIComponent(k)
+    + '&city=' + encodeURIComponent(city || '')
+    + '&keywords=' + encodeURIComponent(name)
+    + '&extensions=base';
+  return jsonp(url).then(d => {
+    if (!d || d.status !== '1') throw new Error((d && d.info) || '线路查询失败');
+    const lines = (d.result && d.result.buslines) || [];
+    if (!lines.length) return [];
+    const st = lines[0].stations || [];
+    return st.map(s => ({ name: s.name, loc: [s.location.lng, s.location.lat] }));
   });
+}
+function showNearbyFallback(keyword, center, err) {
+  const ul = $('resultList');
+  ul.innerHTML = '<li class="hint">搜索失败' + keyErrorHint((err && err.message) || 'error') + '</li>';
+  const li = document.createElement('li');
+  li.innerHTML = '<button class="li-go" style="width:100%">改用手机地图搜索「' + escapeHTML(keyword) + '」</button>';
+  li.querySelector('button').addEventListener('click', () => openMapSearch(keyword));
+  ul.appendChild(li);
+  openSheet(keyword + '（搜索失败）');
+  toast('搜索失败');
 }
 function renderList(items) {
   const ul = $('resultList');
@@ -413,6 +462,44 @@ function goThere(loc, name) {
 }
 function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* 备用通道：Web 服务 API 规划路线 */
+function wsFallbackRoute(start, dest) {
+  $('routePanel').innerHTML = '<p class="hint">规划中…（备用通道）</p>';
+  const city = selectedCity || currentCity || '';
+  // 目的地先地理编码成坐标
+  wsGeocode(dest).then(to => {
+    return wsTransit(start, to, city).then(d => ({ d: d, to: to }));
+  }).then(({ d, to }) => {
+    const plans = d.plans || [];
+    if (!plans.length) {
+      $('routePanel').innerHTML = '<p class="hint">未找到合适路线，试试更具体的地名（如「长治东站」）。</p>';
+      return;
+    }
+    let html = '';
+    plans.slice(0, 3).forEach(p => {
+      const segs = (p.segments || []).map(s => {
+        const line = (s.transit && s.transit.lines || []).map(l => l.name).join('/');
+        const walk = s.walking ? Math.round((s.walking.distance || 0) / 1000 * 10) / 10 : 0;
+        return (line ? '【' + line + '】' : '步行') + (walk ? ' ' + walk + '公里' : '') + ' → ' + (s.instruction || '');
+      }).join('<br/>');
+      html += '<div style="border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:8px">'
+        + '<b>' + (p.time || '?') + ' 分钟 · ' + Math.round((p.distance || 0) / 100) / 10 + ' 公里</b><br/>'
+        + '<span style="font-size:12px;color:#475569;line-height:1.7">' + segs + '</span></div>';
+    });
+    $('routePanel').innerHTML = html;
+    try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
+  }).catch(err => {
+    $('routePanel').innerHTML = '<p class="hint">备用通道规划失败' + keyErrorHint((err && err.message) || 'error') + '。</p>'
+      + '<button class="li-go" id="btnFallbackNav" style="width:100%;margin-top:8px">改用手机地图规划这条路线</button>';
+    const b = document.getElementById('btnFallbackNav');
+    if (b) b.addEventListener('click', () => {
+      const d = ($('destInput2').value || '').trim();
+      const p = PROVIDERS[provider()];
+      window.open(p.search(d, null), '_blank');
+    });
+  });
 }
 
 /* ================= 临时模式（lite，未填 Key） ================= */
@@ -512,6 +599,7 @@ function showBox(which) {
 function openSettings() {
   $('keyInput').value = localStorage.getItem(STORE_KEY) || DEFAULT_AMAP_KEY;
   $('secInput').value = localStorage.getItem(SEC_KEY) || DEFAULT_AMAP_SEC;
+  $('webKeyInput').value = localStorage.getItem(WS_KEY_STORE) || '';
   $('settingsModal').classList.remove('hidden');
 }
 function setActive(id) {
@@ -524,10 +612,11 @@ function bindAll() {
   $('btnSettings').addEventListener('click', openSettings);
   $('btnSaveKey').addEventListener('click', () => {
     const k = $('keyInput').value.trim();
-    if (!k) { toast('请输入 Key'); return; }
     const s = $('secInput').value.trim();
-    localStorage.setItem(STORE_KEY, k);
+    const wk = $('webKeyInput').value.trim();
+    if (k) localStorage.setItem(STORE_KEY, k);
     if (s) localStorage.setItem(SEC_KEY, s); else localStorage.removeItem(SEC_KEY);
+    if (wk) localStorage.setItem(WS_KEY_STORE, wk); else localStorage.removeItem(WS_KEY_STORE);
     $('settingsModal').classList.add('hidden');
     location.reload();
   });
@@ -635,6 +724,91 @@ function runSelfCheck() {
       </div>`).join('')
       + '<p class="hint">提示：白名单修改后高德需 5–30 分钟同步，期间接口仍会返回 INVALID_USER_KEY，属正常现象。</p>';
   }
+}
+
+/* ================= 备用通道：高德 Web 服务 API（JSONP）
+ * 背景：JS API 的服务端接口受「域名白名单」管控，别人在别的域名下用就打不开。
+ * Web 服务 API 用 key 直连 + JSONP 回调，不校验页面域名 → 任何人打开都能用。
+ * 注意：Web 服务 API 需要在控制台另建一个「Web服务」类型的 Key（同样是免费、0 元）。
+ */
+function webKey() { return (localStorage.getItem(WS_KEY_STORE) || '').trim(); }
+
+function jsonp(url, timeout = 12000) {
+  return new Promise((resolve, reject) => {
+    const cb = '__ws_cb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+    const s = document.createElement('script');
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return; done = true;
+      try { delete window[cb]; } catch (e) {}
+      if (s.parentNode) s.parentNode.removeChild(s);
+      reject(new Error('请求超时'));
+    }, timeout);
+    window[cb] = (data) => {
+      if (done) return; done = true;
+      clearTimeout(timer);
+      try { delete window[cb]; } catch (e) {}
+      if (s.parentNode) s.parentNode.removeChild(s);
+      resolve(data);
+    };
+    s.onerror = () => {
+      if (done) return; done = true;
+      clearTimeout(timer);
+      try { delete window[cb]; } catch (e) {}
+      if (s.parentNode) s.parentNode.removeChild(s);
+      reject(new Error('网络请求失败'));
+    };
+    s.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + cb;
+    document.head.appendChild(s);
+  });
+}
+
+/* Web 服务 API：周边搜索 */
+function wsPlaceAround(keyword, center, radius) {
+  const k = webKey();
+  if (!k) return Promise.reject(new Error('NO_WEB_KEY'));
+  const url = 'https://restapi.amap.com/v3/place/around'
+    + '?key=' + encodeURIComponent(k)
+    + '&location=' + center[0] + ',' + center[1]
+    + '&keywords=' + encodeURIComponent(keyword)
+    + '&radius=' + radius + '&sortrule=distance&offset=25&page=1&extensions=base';
+  return jsonp(url).then(d => {
+    if (!d || d.status !== '1') throw new Error((d && d.info) || '搜索失败');
+    return (d.pois || []).map(p => ({
+      name: p.name,
+      addr: p.address || '',
+      dist: p.distance,
+      loc: [p.location.lng, p.location.lat],
+    }));
+  });
+}
+/* Web 服务 API：地理编码 */
+function wsGeocode(addr) {
+  const k = webKey();
+  if (!k) return Promise.reject(new Error('NO_WEB_KEY'));
+  const url = 'https://restapi.amap.com/v3/geocode/geo?key=' + encodeURIComponent(k)
+    + '&address=' + encodeURIComponent(addr);
+  return jsonp(url).then(d => {
+    if (!d || d.status !== '1' || !d.geocodes || !d.geocodes.length) throw new Error((d && d.info) || '地理编码失败');
+    const l = d.geocodes[0].location;
+    return [l.lng, l.lat];
+  });
+}
+/* Web 服务 API：公交路径规划 */
+function wsTransit(start, dest, city) {
+  const k = webKey();
+  if (!k) return Promise.reject(new Error('NO_WEB_KEY'));
+  const url = 'https://restapi.amap.com/v3/direction/transit/integrated'
+    + '?key=' + encodeURIComponent(k)
+    + '&origin=' + start[0] + ',' + start[1]
+    + '&destination=' + dest[0] + ',' + dest[1]
+    + '&city=' + encodeURIComponent(city || '')
+    + '&cityd=' + encodeURIComponent(city || '')
+    + '&strategy=0&extensions=base';
+  return jsonp(url).then(d => {
+    if (!d || d.status !== '1') throw new Error((d && d.info) || '规划失败');
+    return d;
+  });
 }
 
 /* ================= 启动 ================= */

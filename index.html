@@ -113,6 +113,11 @@
       </p>
       <input id="keyInput" type="text" placeholder="粘贴高德 Key" />
       <input id="secInput" type="text" placeholder="粘贴安全密钥（JS API 2.0 必填，否则白屏）" style="margin-top:10px;" />
+      <input id="webKeyInput" type="text" placeholder="备用：Web服务 Key（可选，用于绕过域名白名单）" style="margin-top:10px;" />
+      <p class="hint" style="margin-top:8px;font-size:12px">
+        备用通道说明：JS API 的搜索/路线接口受「域名白名单」管控，别人在别的域名（或你推广给他人时）会被拦。
+        再建一个「<b>Web服务</b>」类型的 Key 填这里（同样免费），工具会自动改走该通道，<b>不受域名限制</b>。
+      </p>
       <div class="modal-actions" style="margin-top:12px">
         <button id="btnSelfCheck" class="ghost">接口自检</button>
       </div>
