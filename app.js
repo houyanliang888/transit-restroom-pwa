@@ -12,6 +12,11 @@ const CITY_KEY  = 'last_city_v1';
 const SELCITY_KEY = 'selected_city_v1';
 const PROV_KEY  = 'map_provider_v1';
 
+/* 内置高德 Key（侯哥申请，已配域名白名单防盗刷）。
+ * 用户未在 ⚙ 自填时直接使用内置值 → 推广时任何人打开即用，无需配置。 */
+const DEFAULT_AMAP_KEY = '52acfdb74e31a72793d0b8bfd459aa88';
+const DEFAULT_AMAP_SEC = 'fcb59b20ee438f984b347c10b035c1cf';
+
 let AMap = null, map = null;
 let currentCity = localStorage.getItem(CITY_KEY) || '';
 let selectedCity = localStorage.getItem(SELCITY_KEY) || '';  // 用户手动选择的城市（空=用 GPS）
@@ -367,8 +372,8 @@ function showBox(which) {
   if (which) $(which).classList.remove('hidden');
 }
 function openSettings() {
-  $('keyInput').value = localStorage.getItem(STORE_KEY) || '';
-  $('secInput').value = localStorage.getItem(SEC_KEY) || '';
+  $('keyInput').value = localStorage.getItem(STORE_KEY) || DEFAULT_AMAP_KEY;
+  $('secInput').value = localStorage.getItem(SEC_KEY) || DEFAULT_AMAP_SEC;
   $('settingsModal').classList.remove('hidden');
 }
 function setActive(id) {
@@ -443,8 +448,8 @@ function bindAll() {
 
 /* ================= 启动 ================= */
 async function boot() {
-  const key = localStorage.getItem(STORE_KEY);
-  const sec = localStorage.getItem(SEC_KEY) || '';
+  const key = localStorage.getItem(STORE_KEY) || DEFAULT_AMAP_KEY;
+  const sec = localStorage.getItem(SEC_KEY) || DEFAULT_AMAP_SEC;
   if (key) {
     try { AMap = await loadAMap(key, sec); initMap(); bindAll(); return; }
     catch (e) { /* Key 失效则降级临时模式 */ toast('Key 加载失败，进入临时版'); }
