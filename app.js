@@ -37,6 +37,34 @@ const PROVIDERS = {
 function enc(s) { return encodeURIComponent(s || ''); }
 const $ = (id) => document.getElementById(id);
 function provider() { return localStorage.getItem(PROV_KEY) || 'amap'; }
+/* 内置城市中心坐标表（WGS-84，运行时转 GCJ-02）。
+ * 作用：选城市时不依赖高德地理编码接口——即使 Key 白名单没配好，"附近/路线/查线"也能正常工作。 */
+const CITY_COORDS = {
+  '北京': [116.407, 39.904], '上海': [121.473, 31.230], '广州': [113.264, 23.129], '深圳': [114.058, 22.543],
+  '成都': [104.066, 30.572], '杭州': [120.155, 30.274], '西安': [108.948, 34.263], '重庆': [106.551, 29.563],
+  '武汉': [114.305, 30.593], '南京': [118.797, 32.060], '天津': [117.190, 39.125], '长沙': [112.938, 28.228],
+  '郑州': [113.625, 34.746], '青岛': [120.383, 36.067], '厦门': [118.089, 24.480], '昆明': [102.833, 24.881],
+  '沈阳': [123.429, 41.796], '大连': [121.618, 38.914], '苏州': [120.585, 31.299], '长治': [112.113, 36.191],
+  '太原': [112.549, 37.857], '石家庄': [114.502, 38.045], '济南': [117.000, 36.675], '合肥': [117.283, 31.861],
+  '福州': [119.306, 26.075], '南昌': [115.858, 28.682], '贵阳': [106.630, 26.647], '南宁': [108.320, 22.824],
+  '海口': [110.199, 20.044], '兰州': [103.834, 36.061], '西宁': [101.778, 36.617], '银川': [106.278, 38.466],
+  '呼和浩特': [111.670, 40.818], '乌鲁木齐': [87.617, 43.793], '拉萨': [91.114, 29.653], '温州': [120.699, 27.994],
+  '宁波': [121.550, 29.874], '无锡': [120.302, 31.574], '常州': [119.947, 31.772], '南通': [120.864, 32.016],
+  '徐州': [117.185, 34.272], '扬州': [119.421, 32.393], '镇江': [119.452, 32.204], '泰州': [119.915, 32.484],
+  '盐城': [120.164, 33.347], '淮安': [119.015, 33.610], '连云港': [119.179, 34.600], '临沂': [118.356, 35.104],
+  '烟台': [121.448, 37.464], '潍坊': [119.107, 36.709], '淄博': [118.048, 36.814], '唐山': [118.180, 39.631],
+  '洛阳': [112.454, 34.619], '襄阳': [112.144, 32.042], '宜昌': [111.290, 30.702], '桂林': [110.290, 25.274],
+  '珠海': [113.554, 22.225], '东莞': [113.746, 23.047], '佛山': [113.122, 23.029], '泉州': [118.590, 24.874],
+  '汕头': [116.708, 23.371], '湛江': [110.364, 21.275], '鞍山': [122.995, 41.110], '吉林': [126.553, 43.843],
+  '长春': [125.323, 43.817], '哈尔滨': [126.535, 45.803], '大庆': [125.112, 46.590], '包头': [109.840, 40.658],
+  '赤峰': [118.887, 42.258], '秦皇岛': [119.600, 39.935], '保定': [115.482, 38.867], '邯郸': [114.539, 36.626],
+  '开封': [114.307, 34.798], '安阳': [114.352, 36.103], '新乡': [113.883, 35.303], '大同': [113.295, 40.090],
+  '晋城': [112.851, 35.497], '阳泉': [113.583, 37.861], '临汾': [111.519, 36.088], '运城': [111.004, 35.023],
+  '遵义': [106.937, 27.707], '绵阳': [104.741, 31.464], '南充': [106.083, 30.795], '宜宾': [104.630, 28.760],
+  '攀枝花': [101.716, 26.580], '丽江': [100.233, 26.872], '大理': [100.268, 25.606], '三亚': [109.508, 18.247],
+  '喀什': [75.990, 39.470], '克拉玛依': [84.886, 45.580], '敦煌': [94.661, 40.142], '嘉峪关': [98.277, 39.787],
+};
+
 function updateCityTag() {
   const el = $('cityTag');
   const modeTag = (mode === 'embed') ? '✓完整版' : '⚠临时版';
@@ -170,6 +198,14 @@ function reverseCity(ll) {
 /* 城市名 → 中心点坐标（内嵌模式手动选城市时，用中心坐标做"附近/路线"基准） */
 function cityToCenter(name) {
   return new Promise((resolve, reject) => {
+    // 优先用内置坐标表（不依赖高德接口，白名单没配好也能用）
+    const key = (name || '').replace(/市$/, '').trim();
+    const hit = CITY_COORDS[key] || CITY_COORDS[name];
+    if (hit) {
+      const g = wgs84ToGcj02(hit[1], hit[0]);
+      resolve([g.lng, g.lat]);
+      return;
+    }
     if (!geocoder) return reject(new Error('地图未加载'));
     geocoder.getLocation(name, (status, res) => {
       if (status === 'complete' && res.geocodes && res.geocodes.length) {
@@ -222,8 +258,19 @@ function doNearby(keyword, colorKey, center) {
     done = true;
     clearTimeout(timer);
     if (status !== 'complete' || !res.poiList || !res.poiList.pois.length) {
-      if (status !== 'complete') toast('搜索失败' + keyErrorHint(status));
-      else toast('附近 2 公里内未找到「' + keyword + '」');
+      if (status !== 'complete') {
+        // 高德接口失败（多为白名单/额度）→ 给一键跳手机地图的出路
+        const ul = $('resultList');
+        ul.innerHTML = '<li class="hint">搜索失败' + keyErrorHint(status) + '</li>';
+        const li = document.createElement('li');
+        li.innerHTML = '<button class="li-go" style="width:100%">改用手机地图搜索「' + escapeHTML(keyword) + '」</button>';
+        li.querySelector('button').addEventListener('click', () => openMapSearch(keyword));
+        ul.appendChild(li);
+        openSheet(keyword + '（搜索失败）');
+        toast('搜索失败' + keyErrorHint(status));
+      } else {
+        toast('附近 2 公里内未找到「' + keyword + '」');
+      }
       return;
     }
     const pois = res.poiList.pois;
@@ -294,7 +341,15 @@ function doTransfer(start, dest) {
       } else if (status === 'no_data') {
         $('routePanel').innerHTML = '<p class="hint">该目的地暂无公交/地铁路线，试试别的目的地。</p>';
       } else {
-        $('routePanel').innerHTML = '<p class="hint">规划失败 ' + keyErrorHint(status) + '。换个目的地或稍后再试。</p>';
+        $('routePanel').innerHTML = '<p class="hint">规划失败 ' + keyErrorHint(status) + '。换个目的地或稍后再试。</p>'
+          + '<button class="li-go" id="btnFallbackNav" style="width:100%;margin-top:8px">改用手机地图规划这条路线</button>';
+        const b = document.getElementById('btnFallbackNav');
+        if (b) b.addEventListener('click', () => {
+          const d = ($('destInput2').value || '').trim();
+          const p = PROVIDERS[provider()];
+          window.open(p.search(d, null), '_blank');
+          toast('已用' + p.name + '规划：' + d);
+        });
         toast('路线规划失败');
       }
     });
