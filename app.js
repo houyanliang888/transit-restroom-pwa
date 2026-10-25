@@ -17,6 +17,9 @@ const PROV_KEY  = 'map_provider_v1';
  * 用户未在 ⚙ 自填时直接使用内置值 → 推广时任何人打开即用，无需配置。 */
 const DEFAULT_AMAP_KEY = '52acfdb74e31a72793d0b8bfd459aa88';
 const DEFAULT_AMAP_SEC = 'fcb59b20ee438f984b347c10b035c1cf';
+/* 内置「Web服务」Key —— 走 JSONP 备用通道，不受域名白名单限制，任何域名都能用。
+ * 用途：① JS 通道不可用时的兜底；② 别人在别的域名打开时也能正常搜索/规划。 */
+const DEFAULT_WEB_KEY = '8c7f3a832c406cfed4d74b8ed0a94b02';
 
 let AMap = null, map = null;
 let currentCity = localStorage.getItem(CITY_KEY) || '';
@@ -247,6 +250,22 @@ function doNearby(keyword, colorKey, center) {
   if (!navigator.onLine) { toast('当前无网络，请连网后重试'); return; }
   clearOverlays();
   addMarker(center, selectedCity || '我的位置', COLORS.me);
+
+  // 主通道：Web 服务 API（JSONP，不受域名白名单限制，已实测可用）
+  const wsP = webKey()
+    ? wsPlaceAround(keyword, center, 2000).then(items => {
+        if (!items.length) { toast('附近 2 公里内未找到「' + keyword + '」'); return 'empty'; }
+        const color = COLORS[colorKey] || COLORS.bus;
+        items.forEach(it => addMarker(it.loc, it.name, color));
+        renderList(items);
+        try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
+        openSheet(keyword + '（' + items.length + '）');
+        return 'ok';
+      }).catch(err => { wsErr = err; return 'fail'; })
+    : Promise.resolve('skip');
+
+  // 增强通道：JS API（若可用则补充距离/画线；不可用不影响结果）
+  let wsErr = null;
   const c = new AMap.LngLat(center[0], center[1]);
   let done = false;
   const timer = setTimeout(() => {
@@ -259,23 +278,10 @@ function doNearby(keyword, colorKey, center) {
     done = true;
     clearTimeout(timer);
     if (status !== 'complete' || !res.poiList || !res.poiList.pois.length) {
-      if (status !== 'complete') {
-        // JS 通道失败 → 自动切备用通道（Web 服务 API），再不行才给跳地图按钮
-        if (webKey()) {
-          wsPlaceAround(keyword, center, 2000).then(items => {
-            if (!items.length) { toast('附近 2 公里内未找到「' + keyword + '」'); return; }
-            const color = COLORS[colorKey] || COLORS.bus;
-            items.forEach(it => addMarker(it.loc, it.name, color));
-            renderList(items);
-            try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
-            openSheet(keyword + '（' + items.length + '）');
-          }).catch(err => showNearbyFallback(keyword, center, err));
-        } else {
-          showNearbyFallback(keyword, center, new Error(status));
-        }
-      } else {
-        toast('附近 2 公里内未找到「' + keyword + '」');
-      }
+      wsP.then(r => {
+        if (r === 'ok' || r === 'empty') return;
+        showNearbyFallback(keyword, center, wsErr || new Error(status));
+      });
       return;
     }
     const pois = res.poiList.pois;
@@ -332,6 +338,8 @@ function doTransfer(start, dest) {
   // 高德 Transfer.search 要求 LngLat 对象或关键字字符串，普通数组可能静默失败 → 统一转换
   let origin = start;
   if (Array.isArray(start)) origin = new AMap.LngLat(start[0], start[1]);
+  // 并行：Web 服务通道（已验证可用，不受域名限制）先行出结果
+  if (webKey()) { wsFallbackRoute(start, dest); }
   try {
     transfer.search(origin, dest, (status, result) => {
       if (done) return;
@@ -346,8 +354,8 @@ function doTransfer(start, dest) {
       } else if (status === 'no_data') {
         $('routePanel').innerHTML = '<p class="hint">该目的地暂无公交/地铁路线，试试别的目的地。</p>';
       } else {
-        // 规划失败 → 若已配 Web 服务 Key，改走备用通道
-        if (webKey()) { wsFallbackRoute(start, dest); return; }
+        // JS 通道失败：Web 通道已在并行跑，这里不覆盖它的结果
+        if (webKey()) return;
         markWsFailed();
         $('routePanel').innerHTML = '<p class="hint">规划失败 ' + keyErrorHint(status) + '。换个目的地或稍后再试。</p>'
           + '<button class="li-go" id="btnFallbackNav" style="width:100%;margin-top:8px">改用手机地图规划这条路线</button>';
@@ -364,7 +372,9 @@ function doTransfer(start, dest) {
   } catch (err) {
     done = true;
     clearTimeout(timer);
-    $('routePanel').innerHTML = '<p class="hint">规划出错：' + (err && err.message ? err.message : '未知错误') + '，请重试。</p>';
+    if (!webKey()) {
+      $('routePanel').innerHTML = '<p class="hint">规划出错：' + (err && err.message ? err.message : '未知错误') + '，请重试。</p>';
+    }
   }
 }
 function searchLine() {
@@ -404,22 +414,29 @@ function searchLine() {
   };
   if (lineSearch) {
     lineSearch.search(name, onLine);
-  } else {
-    // 无 JS 通道 → 用 Web 服务 API 查线路（以站点列表形式展示）
-    wsLineQuery(name, city).then(stations => {
-      if (!stations.length) { toast('未找到「' + name + '」，确认线路名或城市'); return; }
+  }
+  // Web 服务通道（已验证可用，不受域名限制）：优先，且能拿到全程 polyline
+  if (webKey()) {
+    wsLineQuery(name, city).then(res => {
+      if (!res || !res.stations || !res.stations.length) { toast('未找到「' + name + '」，确认线路名或城市'); return; }
       clearOverlays();
-      stations.forEach(s => addMarker(s.loc, s.name, COLORS.bus));
-      renderList(stations.map((s, i) => ({ name: (i + 1) + '. ' + s.name, addr: name, dist: '', loc: s.loc })));
+      const color = (res.name || '').includes('地铁') ? COLORS.metro : COLORS.bus;
+      if (res.polyline && res.polyline.length) {
+        try {
+          const poly = new AMap.Polyline({ path: res.polyline, strokeColor: color, strokeWeight: 6, strokeOpacity: 0.85, zIndex: 8 });
+          map.add(poly); overlays.push(poly);
+        } catch (e) {}
+      }
+      res.stations.forEach(s => addMarker(s.loc, s.name, color));
+      renderList(res.stations.map((s, i) => ({ name: (i + 1) + '. ' + s.name, addr: res.name || name, dist: '', loc: s.loc })));
       if (overlays.length) try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
-      openSheet(name + '（' + stations.length + ' 站）');
+      openSheet((res.name || name) + '（' + res.stations.length + ' 站）');
     }).catch(err => {
-      if (lineDone) return; lineDone = true; clearTimeout(lineTimer);
       toast('查询失败' + keyErrorHint((err && err.message) || 'error'));
     });
   }
 }
-/* Web 服务 API：查线路站点 */
+/* Web 服务 API：查线路站点 + 全程走向 */
 function wsLineQuery(name, city) {
   const k = webKey();
   if (!k) return Promise.reject(new Error('NO_WEB_KEY'));
@@ -430,9 +447,21 @@ function wsLineQuery(name, city) {
   return jsonp(url).then(d => {
     if (!d || d.status !== '1') throw new Error((d && d.info) || '线路查询失败');
     const lines = (d.result && d.result.buslines) || [];
-    if (!lines.length) return [];
-    const st = lines[0].stations || [];
-    return st.map(s => ({ name: s.name, loc: [s.location.lng, s.location.lat] }));
+    if (!lines.length) return null;
+    const line = lines[0];
+    const st = (line.stations || []);
+    const poly = [];
+    if (line.polyline) {
+      line.polyline.split(';').forEach(pt => {
+        const a = pt.split(',');
+        if (a.length >= 2) poly.push([parseFloat(a[0]), parseFloat(a[1])]);
+      });
+    }
+    return {
+      name: line.name,
+      stations: st.map(s => ({ name: s.name, loc: [s.location.lng, s.location.lat] })),
+      polyline: poly,
+    };
   });
 }
 function showNearbyFallback(keyword, center, err) {
@@ -467,15 +496,16 @@ function escapeHTML(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-/* 备用通道：Web 服务 API 规划路线 */
+/* 备用通道：Web 服务 API 规划路线（已实测可用，不受域名白名单限制） */
 function wsFallbackRoute(start, dest) {
-  $('routePanel').innerHTML = '<p class="hint">规划中…（备用通道）</p>';
   const city = selectedCity || currentCity || '';
-  // 目的地先地理编码成坐标
+  $('routePanel').innerHTML = '<p class="hint">规划中…</p>';
+  // 目的地先地理编码成坐标（走 Web 通道，不依赖高德 JS 地理编码接口）
   wsGeocode(dest).then(to => {
     return wsTransit(start, to, city).then(d => ({ d: d, to: to }));
   }).then(({ d, to }) => {
-    const plans = d.plans || [];
+    // Web 服务 API 的结构：d.route.transits[]
+    const plans = (d.route && d.route.transits) || [];
     if (!plans.length) {
       $('routePanel').innerHTML = '<p class="hint">未找到合适路线，试试更具体的地名（如「长治东站」）。</p>';
       return;
@@ -487,14 +517,35 @@ function wsFallbackRoute(start, dest) {
         const walk = s.walking ? Math.round((s.walking.distance || 0) / 1000 * 10) / 10 : 0;
         return (line ? '【' + line + '】' : '步行') + (walk ? ' ' + walk + '公里' : '') + ' → ' + (s.instruction || '');
       }).join('<br/>');
+      const mins = p.duration ? Math.round(p.duration / 60) : (p.time || '?');
+      const km = Math.round((p.distance || 0) / 100) / 10;
       html += '<div style="border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:8px">'
-        + '<b>' + (p.time || '?') + ' 分钟 · ' + Math.round((p.distance || 0) / 100) / 10 + ' 公里</b><br/>'
+        + '<b>' + mins + ' 分钟 · ' + km + ' 公里</b><br/>'
         + '<span style="font-size:12px;color:#475569;line-height:1.7">' + segs + '</span></div>';
+      // 在地图上画出该方案的路径
+      try {
+        const path = [];
+        (p.segments || []).forEach(s => {
+          if (s.walking && s.walking.polyline) {
+            s.walking.polyline.split(';').forEach(pt => { const a = pt.split(','); if (a.length >= 2) path.push([parseFloat(a[0]), parseFloat(a[1])]); });
+          }
+          if (s.transit && s.transit.polyline) {
+            s.transit.polyline.split(';').forEach(pt => { const a = pt.split(','); if (a.length >= 2) path.push([parseFloat(a[0]), parseFloat(a[1])]); });
+          }
+        });
+        if (path.length > 1) {
+          const poly = new AMap.Polyline({ path: path, strokeColor: COLORS.bus, strokeWeight: 7, strokeOpacity: 0.9, zIndex: 9 });
+          map.add(poly); overlays.push(poly);
+          const pts = [[start[0], start[1]], [to[0], to[1]]];
+          const mk = new AMap.Marker({ position: pts[1], title: dest, offset: new AMap.Pixel(-15, -32), content: pinHTML(COLORS.bus, dest), zIndex: 12 });
+          map.add(mk); overlays.push(mk);
+          map.setFitView(overlays, false, [60, 60, 60, 60]);
+        }
+      } catch (e) {}
     });
     $('routePanel').innerHTML = html;
-    try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
   }).catch(err => {
-    $('routePanel').innerHTML = '<p class="hint">备用通道规划失败' + keyErrorHint((err && err.message) || 'error') + '。</p>'
+    $('routePanel').innerHTML = '<p class="hint">规划失败' + keyErrorHint((err && err.message) || 'error') + '。</p>'
       + '<button class="li-go" id="btnFallbackNav" style="width:100%;margin-top:8px">改用手机地图规划这条路线</button>';
     const b = document.getElementById('btnFallbackNav');
     if (b) b.addEventListener('click', () => {
@@ -737,7 +788,7 @@ function runSelfCheck() {
  * Web 服务 API 用 key 直连 + JSONP 回调，不校验页面域名 → 任何人打开都能用。
  * 注意：Web 服务 API 需要在控制台另建一个「Web服务」类型的 Key（同样是免费、0 元）。
  */
-function webKey() { return (localStorage.getItem(WS_KEY_STORE) || '').trim(); }
+function webKey() { return (localStorage.getItem(WS_KEY_STORE) || DEFAULT_WEB_KEY).trim(); }
 
 function jsonp(url, timeout = 12000) {
   return new Promise((resolve, reject) => {
@@ -769,15 +820,27 @@ function jsonp(url, timeout = 12000) {
   });
 }
 
+/* POI 类型码：让搜索结果更精准（纯关键词搜索会混入住宅区等无关 POI） */
+const POI_TYPES = {
+  '公共厕所': '120302',
+  '公交站': '150100',
+  '地铁站': '150200',
+};
+
 /* Web 服务 API：周边搜索 */
 function wsPlaceAround(keyword, center, radius) {
   const k = webKey();
   if (!k) return Promise.reject(new Error('NO_WEB_KEY'));
-  const url = 'https://restapi.amap.com/v3/place/around'
+  const types = POI_TYPES[keyword];
+  let url = 'https://restapi.amap.com/v3/place/around'
     + '?key=' + encodeURIComponent(k)
     + '&location=' + center[0] + ',' + center[1]
-    + '&keywords=' + encodeURIComponent(keyword)
     + '&radius=' + radius + '&sortrule=distance&offset=25&page=1&extensions=base';
+  if (types) {
+    url += '&types=' + types;
+  } else {
+    url += '&keywords=' + encodeURIComponent(keyword);
+  }
   return jsonp(url).then(d => {
     if (!d || d.status !== '1') throw new Error((d && d.info) || '搜索失败');
     return (d.pois || []).map(p => ({
