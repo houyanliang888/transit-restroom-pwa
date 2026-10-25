@@ -199,7 +199,16 @@ function doNearby(keyword, colorKey, center) {
   clearOverlays();
   addMarker(center, selectedCity || '我的位置', COLORS.me);
   const c = new AMap.LngLat(center[0], center[1]);
+  let done = false;
+  const timer = setTimeout(() => {
+    if (done) return;
+    done = true;
+    toast('搜索超时，请检查网络后重试');
+  }, 15000);
   placeSearch.searchNearBy(keyword, c, 2000, (status, res) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
     if (status !== 'complete' || !res.poiList || !res.poiList.pois.length) {
       toast('附近 2 公里内未找到「' + keyword + '」'); return;
     }
@@ -228,8 +237,40 @@ function planTransfer() {
     .catch(() => toast('城市解析失败，请检查城市名'));
 }
 function doTransfer(start, dest) {
-  $('routePanel').innerHTML = '<p class="hint">规划中…</p>';
-  transfer.search(start, dest, (status) => { if (status !== 'complete') toast('路线规划失败，换个目的地试试'); });
+  $('routePanel').innerHTML = '<p class="hint">规划中…（最长约 20 秒）</p>';
+  let done = false;
+  const timer = setTimeout(() => {
+    if (done) return;
+    done = true;
+    $('routePanel').innerHTML = '<p class="hint">规划超时，请检查网络后重试。</p>';
+    toast('路线规划超时');
+  }, 20000);
+  // 高德 Transfer.search 要求 LngLat 对象或关键字字符串，普通数组可能静默失败 → 统一转换
+  let origin = start;
+  if (Array.isArray(start)) origin = new AMap.LngLat(start[0], start[1]);
+  try {
+    transfer.search(origin, dest, (status, result) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (status === 'complete') {
+        const plans = (result && result.plans && result.plans.length) || 0;
+        if (!plans) {
+          $('routePanel').innerHTML = '<p class="hint">未找到合适路线，试试更具体的地名（如「长治东站」）。</p>';
+        }
+        // 有结果时高德自动渲染到 routePanel
+      } else if (status === 'no_data') {
+        $('routePanel').innerHTML = '<p class="hint">该目的地暂无公交/地铁路线，试试别的目的地。</p>';
+      } else {
+        $('routePanel').innerHTML = '<p class="hint">规划失败（' + status + '），换个目的地或稍后再试。</p>';
+        toast('路线规划失败');
+      }
+    });
+  } catch (err) {
+    done = true;
+    clearTimeout(timer);
+    $('routePanel').innerHTML = '<p class="hint">规划出错：' + (err && err.message ? err.message : '未知错误') + '，请重试。</p>';
+  }
 }
 function searchLine() {
   const name = $('lineInput').value.trim();
@@ -237,7 +278,16 @@ function searchLine() {
   const city = selectedCity || currentCity;
   if (!city) { toast('请先定位或选择城市'); return; }
   try { lineSearch.setCity(city); } catch (e) {}
+  let lineDone = false;
+  const lineTimer = setTimeout(() => {
+    if (lineDone) return;
+    lineDone = true;
+    toast('查询超时，请检查网络后重试');
+  }, 15000);
   lineSearch.search(name, (status, res) => {
+    if (lineDone) return;
+    lineDone = true;
+    clearTimeout(lineTimer);
     if (status !== 'complete' || !res.lineInfo || !res.lineInfo.length) {
       toast('未找到「' + name + '」，确认线路名或城市'); return;
     }
