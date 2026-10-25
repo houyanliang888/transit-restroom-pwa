@@ -39,9 +39,10 @@ const $ = (id) => document.getElementById(id);
 function provider() { return localStorage.getItem(PROV_KEY) || 'amap'; }
 function updateCityTag() {
   const el = $('cityTag');
-  if (selectedCity) el.textContent = selectedCity + '（已选）';
-  else if (currentCity) el.textContent = currentCity;
-  else el.textContent = '定位中…';
+  const modeTag = (mode === 'embed') ? '✓完整版' : '⚠临时版';
+  if (selectedCity) el.textContent = modeTag + '·' + selectedCity + '（已选）';
+  else if (currentCity) el.textContent = modeTag + '·' + currentCity;
+  else el.textContent = modeTag + '·定位中…';
 }
 
 /* 坐标纠偏：浏览器 GPS 是 WGS-84，中国地图用 GCJ-02（高德/腾讯）/ BD-09（百度）。
@@ -184,10 +185,19 @@ function searchNearby(keyword, colorKey) {
     // 手动选了城市 → 以该城市中心为基准搜（提前查出差地、或定位失败时兜底）
     if (!cityCenterCache[selectedCity]) {
       toast('正在定位「' + selectedCity + '」中心…');
+      let ctDone = false;
+      const ctTimer = setTimeout(() => {
+        if (ctDone) return; ctDone = true;
+        toast('城市定位超时' + keyErrorHint('timeout'));
+      }, 12000);
       cityToCenter(selectedCity).then(ll => {
+        ctDone = true; clearTimeout(ctTimer);
         cityCenterCache[selectedCity] = ll;
         doNearby(keyword, colorKey, ll);
-      }).catch(() => toast('城市解析失败，请检查城市名'));
+      }).catch(err => {
+        ctDone = true; clearTimeout(ctTimer);
+        toast('城市定位失败' + keyErrorHint((err && err.message) || 'error'));
+      });
       return;
     }
     center = cityCenterCache[selectedCity];
@@ -255,6 +265,10 @@ function doTransfer(start, dest) {
     $('routePanel').innerHTML = '<p class="hint">当前无网络，请连网后重试。</p>';
     toast('无网络'); return;
   }
+  if (!transfer) {
+    $('routePanel').innerHTML = '<p class="hint">路线规划模块未加载（多为 Key 白名单限制），请检查高德后台域名白名单。</p>';
+    toast('路线模块未加载'); return;
+  }
   $('routePanel').innerHTML = '<p class="hint">规划中…（最长约 20 秒）</p>';
   let done = false;
   const timer = setTimeout(() => {
@@ -293,6 +307,7 @@ function doTransfer(start, dest) {
 function searchLine() {
   const name = $('lineInput').value.trim();
   if (!name) { toast('请输入线路名，如 地铁1号线 / 1路'); return; }
+  if (!lineSearch) { toast('线路查询模块未加载（多为 Key 白名单限制）'); return; }
   const city = selectedCity || currentCity;
   if (!city) { toast('请先定位或选择城市'); return; }
   try { lineSearch.setCity(city); } catch (e) {}
@@ -300,7 +315,7 @@ function searchLine() {
   const lineTimer = setTimeout(() => {
     if (lineDone) return;
     lineDone = true;
-    toast('查询超时，请检查网络后重试');
+    toast('查询超时' + keyErrorHint('timeout'));
   }, 15000);
   lineSearch.search(name, (status, res) => {
     if (lineDone) return;
@@ -540,6 +555,14 @@ async function boot() {
     enterLite();
   } finally {
     ensureBind();                      // 无论如何都保证按钮事件被绑定
+    setTimeout(() => {
+      if (mode === 'embed') {
+        toast('✓ 完整版已启用：可查附近/路线/查线', 3000);
+      } else {
+        toast('⚠ 当前是临时版：高德 Key 未生效（多为域名白名单限制），功能会跳转到地图 App', 6000);
+      }
+      updateCityTag();
+    }, 900);
   }
 }
 
