@@ -3,7 +3,7 @@
  * 重要：只有「页面导航请求」失败才回退到首页 HTML；
  *      JS/CSS 等资源失败绝不回退到 HTML——否则 HTML 会被浏览器当 JS 执行，整个应用崩溃（表现为所有按钮无反应）。
  */
-const CACHE = 'transit-pwa-v5-robust';
+const CACHE = 'transit-pwa-v6-cityfix';
 const ASSETS = [
   './',
   './index.html',

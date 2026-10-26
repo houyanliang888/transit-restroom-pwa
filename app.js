@@ -246,41 +246,58 @@ function searchNearby(keyword, colorKey) {
   }
   doNearby(keyword, colorKey, center);
 }
+/* 周边搜索三级兜底：小城市类型码 POI 稀疏（如长治 2km 内搜不到公厕），
+ * 依次尝试 ① 类型码 3km ② 关键词"厕所" 5km ③ 关键词原名 5km */
+function wsNearbyChain(keyword, center) {
+  const alt = { '公共厕所': '厕所', '厕所': '公共厕所' };
+  return wsPlaceAround(keyword, center, 3000).then(items => {
+    if (items.length || !POI_TYPES[keyword]) return { items: items, kw: keyword, radius: 3000 };
+    const kw2 = alt[keyword] || keyword;
+    return wsPlaceAround(kw2, center, 5000).then(items2 => {
+      if (items2.length) return { items: items2, kw: kw2, radius: 5000 };
+      return wsPlaceAround(keyword, center, 5000).then(items3 =>
+        ({ items: items3, kw: keyword, radius: 5000 }));
+    });
+  });
+}
 function doNearby(keyword, colorKey, center) {
   if (!navigator.onLine) { toast('当前无网络，请连网后重试'); return; }
   clearOverlays();
   addMarker(center, selectedCity || '我的位置', COLORS.me);
 
-  // 主通道：Web 服务 API（JSONP，不受域名白名单限制，已实测可用）
-  const wsP = webKey()
-    ? wsPlaceAround(keyword, center, 2000).then(items => {
-        if (!items.length) { toast('附近 2 公里内未找到「' + keyword + '」'); return 'empty'; }
-        const color = COLORS[colorKey] || COLORS.bus;
-        items.forEach(it => addMarker(it.loc, it.name, color));
-        renderList(items);
-        try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
-        openSheet(keyword + '（' + items.length + '）');
-        return 'ok';
-      }).catch(err => { wsErr = err; return 'fail'; })
-    : Promise.resolve('skip');
-
-  // 增强通道：JS API（若可用则补充距离/画线；不可用不影响结果）
-  let wsErr = null;
-  const c = new AMap.LngLat(center[0], center[1]);
   let done = false;
   const timer = setTimeout(() => {
     if (done) return;
     done = true;
-    toast('搜索超时' + keyErrorHint('timeout'));
-  }, 15000);
-  placeSearch.searchNearBy(keyword, c, 2000, (status, res) => {
+    toast('搜索超时，请检查网络后重试');
+  }, 20000);
+
+  // 主通道：Web 服务 API（JSONP，不受域名白名单限制，已实测可用）
+  const wsP = webKey()
+    ? wsNearbyChain(keyword, center).then(r => {
+        if (done) return 'late';
+        done = true; clearTimeout(timer);
+        if (!r.items.length) { toast('附近 ' + (r.radius / 1000) + ' 公里内未找到「' + r.kw + '」'); return 'empty'; }
+        const color = COLORS[colorKey] || COLORS.bus;
+        r.items.forEach(it => addMarker(it.loc, it.name, color));
+        renderList(r.items);
+        try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
+        openSheet(r.kw + '（' + r.items.length + '）');
+        return 'ok';
+      }).catch(err => { return 'fail:' + ((err && err.message) || 'error'); })
+    : Promise.resolve('skip');
+
+  // 增强通道：JS API（若可用则补充距离/画线；不可用不影响结果）
+  const c = new AMap.LngLat(center[0], center[1]);
+  placeSearch.searchNearBy(keyword, c, 3000, (status, res) => {
     if (done) return;
     done = true;
     clearTimeout(timer);
     if (status !== 'complete' || !res.poiList || !res.poiList.pois.length) {
       wsP.then(r => {
-        if (r === 'ok' || r === 'empty') return;
-        showNearbyFallback(keyword, center, wsErr || new Error(status));
+        if (r === 'ok' || r === 'empty' || r === 'late') return;
+        if (typeof r === 'string' && r.indexOf('fail:') === 0) showNearbyFallback(keyword, center, new Error(r.slice(5)));
+        else if (r === 'skip') showNearbyFallback(keyword, center, new Error(status));
       });
       return;
     }
@@ -419,6 +436,8 @@ function searchLine() {
   if (webKey()) {
     wsLineQuery(name, city).then(res => {
       if (!res || !res.stations || !res.stations.length) { toast('未找到「' + name + '」，确认线路名或城市'); return; }
+      // Web 通道已出结果，清掉 JS 通道的 15 秒兜底计时器，避免结果出来还弹"查询超时"
+      if (!lineDone) { lineDone = true; clearTimeout(lineTimer); }
       clearOverlays();
       const color = ((res.name || '') + (res.type || '')).includes('地铁') ? COLORS.metro : COLORS.bus;
       if (res.polyline && res.polyline.length) {
@@ -528,15 +547,18 @@ function escapeHTML(s) {
 function wsFallbackRoute(start, dest) {
   const city = selectedCity || currentCity || '';
   $('routePanel').innerHTML = '<p class="hint">规划中…</p>';
-  wsGeocode(dest).then(to => {
-    return wsTransit(start, to, city).then(d => ({ d: d, to: to }));
-  }).then(({ d, to }) => {
+  resolveDest(dest, city).then(m => {
+    // 先告诉用户目的地到底匹配到了哪，避免"输入高铁站却规划到外省"这种懵圈
+    const hint = '✅ 已匹配目的地：<b>' + escapeHTML(m.name) + '</b>'
+      + (m.city && m.city !== city ? '（' + escapeHTML(m.city) + '）' : '');
+    return wsTransit(start, m.loc, city || m.city).then(d => ({ d: d, m: m, hint: hint }));
+  }).then(({ d, m, hint }) => {
     const plans = (d.route && d.route.transits) || [];
     if (!plans.length) {
-      $('routePanel').innerHTML = '<p class="hint">未找到合适路线，试试更具体的地名（如「长治东站」）。</p>';
+      $('routePanel').innerHTML = '<p class="hint">' + hint + '<br/>这两点之间暂无公交/地铁方案，试试更近的目的地。</p>';
       return;
     }
-    let html = '';
+    let html = '<div style="font-size:12px;color:#16a34a;margin-bottom:6px">' + hint + '</div>';
     plans.slice(0, 3).forEach(p => {
       let segs = '';
       let path = [];
@@ -554,11 +576,12 @@ function wsFallbackRoute(start, dest) {
         // 公交段
         const buslines = (s.bus && s.bus.buslines) || [];
         buslines.forEach(b => {
-          // Web API：线路名在 b.name，站点数在 b.via_num，首末站在 departure_stop/arrival_stop
+          // Web API：线路名在 b.name，站点数在 b.via_num，首末站在 departure_stop/arrival_stop（是对象，取 .name）
           const names = b.name || (b.lines || []).map(l => l.name).filter(Boolean).join('/') || '公交';
           const stopCount = b.via_num || (b.stops || b.busstops || []).length || 0;
+          const from = stopName(b.departure_stop), to = stopName(b.arrival_stop);
           segs += '🚌 ' + names + (stopCount ? '（' + stopCount + ' 站）' : '')
-            + (b.departure_stop ? '　' + b.departure_stop + ' → ' + (b.arrival_stop || '') : '') + '<br/>';
+            + (from ? '　' + from + (to ? ' → ' + to : '') : '') + '<br/>';
           if (b.polyline) b.polyline.split(';').forEach(pt => {
             const a = pt.split(',');
             if (a.length >= 2) path.push([parseFloat(a[0]), parseFloat(a[1])]);
@@ -579,7 +602,7 @@ function wsFallbackRoute(start, dest) {
         if (path.length > 1) {
           const poly = new AMap.Polyline({ path: path, strokeColor: COLORS.bus, strokeWeight: 7, strokeOpacity: 0.9, zIndex: 9 });
           map.add(poly); overlays.push(poly);
-          const mk = new AMap.Marker({ position: [to[0], to[1]], title: dest, offset: new AMap.Pixel(-15, -32), content: pinHTML(COLORS.bus, dest), zIndex: 12 });
+          const mk = new AMap.Marker({ position: [m.loc[0], m.loc[1]], title: m.name, offset: new AMap.Pixel(-15, -32), content: pinHTML(COLORS.bus, m.name), zIndex: 12 });
           map.add(mk); overlays.push(mk);
         }
       } catch (e) {}
@@ -862,6 +885,18 @@ function jsonp(url, timeout = 12000) {
   });
 }
 
+/* 带一次重试的 JSONP：手机网络抖动 / 高德 QPS 瞬时限流时，超时自动再试一次 */
+function jsonpRetry(url, timeout, tries) {
+  tries = tries == null ? 2 : tries;
+  return jsonp(url, timeout || 15000).catch(err => {
+    const msg = (err && err.message) || '';
+    if (tries > 1 && (msg.indexOf('超时') >= 0 || /timeout/i.test(msg))) {
+      return new Promise(r => setTimeout(r, 700)).then(() => jsonpRetry(url, timeout, tries - 1));
+    }
+    throw err;
+  });
+}
+
 /* POI 类型码：经实测「公交站/地铁站」用类型码查不到，改用关键词更可靠（返回名称带"(公交站)"后缀）
  * 公共厕所用 types=120302 精确匹配（纯关键词会混入住宅区） */
 const POI_TYPES = {
@@ -883,7 +918,7 @@ function parseLoc(loc) {
   return null;
 }
 
-/* Web 服务 API：周边搜索 */
+/* Web 服务 API：周边搜索（JSONP 带重试，小城市网络慢也扛得住） */
 function wsPlaceAround(keyword, center, radius) {
   const k = webKey();
   if (!k) return Promise.reject(new Error('NO_WEB_KEY'));
@@ -899,7 +934,7 @@ function wsPlaceAround(keyword, center, radius) {
     url += '&keywords=' + encodeURIComponent(keyword);
     if (city) url += '&city=' + encodeURIComponent(city);
   }
-  return jsonp(url).then(d => {
+  return jsonpRetry(url, 15000).then(d => {
     if (!d || d.status !== '1') throw new Error((d && d.info) || '搜索失败');
     return (d.pois || []).map(p => ({
       name: p.name,
@@ -908,6 +943,49 @@ function wsPlaceAround(keyword, center, radius) {
       loc: parseLoc(p.location),
     })).filter(x => x.loc);
   });
+}
+/* 站点名兼容：extensions=all 时 departure_stop/arrival_stop 是对象 {id,name,location}，
+ * 直接拼接会打出 [object Object]，必须取 .name */
+function stopName(s) {
+  if (!s) return '';
+  if (typeof s === 'string') return s;
+  return s.name || '';
+}
+
+/* Web 服务 API：关键词搜索（用于目的地匹配，可限定城市） */
+function wsTextSearch(keyword, city, citylimit) {
+  const k = webKey();
+  if (!k) return Promise.reject(new Error('NO_WEB_KEY'));
+  let url = 'https://restapi.amap.com/v3/place/text?key=' + encodeURIComponent(k)
+    + '&keywords=' + encodeURIComponent(keyword)
+    + '&offset=5&page=1&extensions=base';
+  if (city) url += '&city=' + encodeURIComponent(city);
+  if (citylimit) url += '&citylimit=true';
+  return jsonpRetry(url, 15000).then(d => {
+    if (!d || d.status !== '1') throw new Error((d && d.info) || '搜索失败');
+    return (d.pois || []).map(p => {
+      let cname = p.cityname || '';
+      if (cname === '[]') cname = '';
+      return {
+        name: p.name,
+        addr: (p.pname || '') + cname + (p.adname || '') + (p.address && p.address !== '[]' ? ' ' + p.address : ''),
+        city: cname,
+        loc: parseLoc(p.location),
+      };
+    }).filter(x => x.loc);
+  });
+}
+/* 目的地解析：先在本市搜（citylimit 防止「高铁站」匹配到外地同名点），
+ * 再搜「城市 + 关键词」，再地理编码，最后全国搜——四级兜底 */
+function resolveDest(name, city) {
+  return wsTextSearch(name, city || '', true).catch(() => [])
+    .then(l1 => l1.length ? l1 : (city ? wsTextSearch(city + ' ' + name, '', false).catch(() => []) : []))
+    .then(l2 => l2.length ? l2 : wsGeocode(name).then(loc => [{ name: name, addr: '地理编码匹配', city: '', loc: loc }]).catch(() => []))
+    .then(l3 => l3.length ? l3 : wsTextSearch(name, '', false).catch(() => []))
+    .then(list => {
+      if (!list.length) throw new Error('目的地没找到，试试更具体的名字（如「长治东站」）');
+      return list[0];
+    });
 }
 /* Web 服务 API：地理编码 */
 function wsGeocode(addr) {
@@ -946,7 +1024,7 @@ function wsTransit(start, dest, city) {
 let wsFailStreak = 0;   // 连续失败次数
 function markWsFailed() {
   wsFailStreak++;
-  if (wsFailStreak >= 2 && mode === 'embed') {
+  if (wsFailStreak >= 3 && mode === 'embed') {
     toast('高德接口不可用，已切换为手机地图模式', 4000);
     degradeToLite();
   }
@@ -968,7 +1046,10 @@ function degradeToLite() {
 /* ================= 启动 ================= */
 /* 全局错误兜底：任何脚本错误都提示出来，避免"点了没反应"却无从排查 */
 window.addEventListener('error', (e) => {
-  try { toast('脚本出错：' + (e.message || '未知') + '，请刷新重试', 5000); } catch (_) {}
+  const msg = e.message || '';
+  // 高德瓦片 worker 的已知无害报错，不打扰用户
+  if (msg.indexOf('Unimplemented type') >= 0) return;
+  try { toast('脚本出错：' + msg + '，请刷新重试', 5000); } catch (_) {}
 });
 
 let bound = false;
