@@ -278,17 +278,18 @@ function doNearby(keyword, colorKey, center) {
   addMarker(center, selectedCity || '我的位置', COLORS.me);
 
   let done = false;
+  const finish = () => { done = true; clearTimeout(timer); };
   const timer = setTimeout(() => {
     if (done) return;
-    done = true;
+    finish();
     toast('搜索超时，请检查网络后重试');
-  }, 20000);
+  }, 28000);
 
-  // 主通道：Web 服务 API（JSONP，不受域名白名单限制，已实测可用）
+  // 主通道：Web 服务 API（JSONP，不受域名白名单限制，已实测可用）—— 权威结果
   const wsP = webKey()
     ? wsNearbyChain(keyword, center).then(r => {
         if (done) return 'late';
-        done = true; clearTimeout(timer);
+        finish();
         if (!r.items.length) { toast('附近 ' + (r.radius / 1000) + ' 公里内未找到「' + r.kw + '」'); return 'empty'; }
         const color = COLORS[colorKey] || COLORS.bus;
         r.items.forEach(it => addMarker(it.loc, it.name, color));
@@ -296,34 +297,34 @@ function doNearby(keyword, colorKey, center) {
         try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
         openSheet(r.kw + '（' + r.items.length + '）');
         return 'ok';
-      }).catch(err => { return 'fail:' + ((err && err.message) || 'error'); })
+      }).catch(err => {
+        if (!done) { finish(); showNearbyFallback(keyword, center, err); }
+        return 'fail:' + ((err && err.message) || 'error');
+      })
     : Promise.resolve('skip');
 
-  // 增强通道：JS API（若可用则补充距离/画线；不可用不影响结果）
-  const c = new AMap.LngLat(center[0], center[1]);
-  placeSearch.searchNearBy(keyword, c, 3000, (status, res) => {
-    if (done) return;
-    done = true;
-    clearTimeout(timer);
-    if (status !== 'complete' || !res.poiList || !res.poiList.pois.length) {
-      wsP.then(r => {
-        if (r === 'ok' || r === 'empty' || r === 'late') return;
-        if (typeof r === 'string' && r.indexOf('fail:') === 0) showNearbyFallback(keyword, center, new Error(r.slice(5)));
-        else if (r === 'skip') showNearbyFallback(keyword, center, new Error(status));
-      });
-      return;
-    }
-    const pois = res.poiList.pois;
-    const color = COLORS[colorKey] || COLORS.bus;
-    pois.forEach(p => addMarker([p.location.lng, p.location.lat], p.name, color));
-    renderList(pois.map(p => ({
-      name: p.name,
-      addr: p.address || ((p.pname || '') + (p.cityname || '') + (p.adname || '')),
-      dist: p.distance, loc: [p.location.lng, p.location.lat],
-    })));
-    try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
-    openSheet(keyword + '（' + pois.length + '）');
-  });
+  // 增强通道：JS API（高德那把 Key 已失效，通常会失败）。它失败时绝不复写 done、不压制 Web 结果；
+  // 仅当 Web 还没出结果且 JS 自身确实有数据时，才用它作增强补充。
+  try {
+    const c = new AMap.LngLat(center[0], center[1]);
+    placeSearch.searchNearBy(keyword, c, 3000, (status, res) => {
+      if (done) return; // Web 已出结果，JS 不再介入
+      if (status === 'complete' && res.poiList && res.poiList.pois && res.poiList.pois.length) {
+        finish();
+        const pois = res.poiList.pois;
+        const color = COLORS[colorKey] || COLORS.bus;
+        pois.forEach(p => addMarker([p.location.lng, p.location.lat], p.name, color));
+        renderList(pois.map(p => ({
+          name: p.name,
+          addr: p.address || ((p.pname || '') + (p.cityname || '') + (p.adname || '')),
+          dist: p.distance, loc: [p.location.lng, p.location.lat],
+        })));
+        try { map.setFitView(overlays, false, [40, 40, 40, 40]); } catch (e) {}
+        openSheet(keyword + '（' + pois.length + '）');
+      }
+      // JS 通道失败/无结果：静待 Web 通道，不做任何事
+    });
+  } catch (e) {}
 }
 function planTransfer() {
   const dest = $('destInput2').value.trim();
