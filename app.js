@@ -557,18 +557,17 @@ function escapeHTML(s) {
  *   步行路径在 segment.walking.steps[].polyline
  */
 function wsFallbackRoute(start, dest) {
-  const city = selectedCity || currentCity || '';
+  const baseCity = selectedCity || currentCity || '';
   $('routePanel').innerHTML = '<p class="hint">规划中…</p>';
-  // 传入用户当前坐标作为 origin：优先就近匹配目的地，杜绝"高铁站"被匹配到外省
-  resolveDest(dest, city, myLocation).then(m => {
-    // 出发城市缺失时（刚打开还没反查完），用起点坐标补一次反查，保证 transit 拿到城市
-    const cityP = city ? Promise.resolve(city)
-      : wsRegeo(start).then(r => r && r.city ? r.city : '').catch(() => '');
-    return cityP.then(c => {
-      const useCity = c || m.city || '';
+  // 出发城市缺失时（GPS 刚打开还没反查完），先用起点坐标反查拿到城市
+  const cityP = baseCity ? Promise.resolve(baseCity)
+    : wsRegeo(start).then(r => r && r.city ? r.city : '').catch(() => '');
+  cityP.then(city => {
+    // 带着确定的城市 + 用户坐标去匹配目的地，彻底杜绝"高铁站"被匹配到外省
+    return resolveDest(dest, city, myLocation).then(m => {
       const hint = '✅ 已匹配目的地：<b>' + escapeHTML(m.name) + '</b>'
-        + (m.city && m.city !== useCity ? '（' + escapeHTML(m.city) + '）' : '');
-      return wsTransit(start, m.loc, useCity).then(d => ({ d: d, m: m, hint: hint }));
+        + (m.city && m.city !== city ? '（' + escapeHTML(m.city) + '）' : '');
+      return wsTransit(start, m.loc, city || m.city).then(d => ({ d: d, m: m, hint: hint }));
     });
   }).then(({ d, m, hint }) => {
     const plans = (d.route && d.route.transits) || [];
