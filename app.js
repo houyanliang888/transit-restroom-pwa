@@ -48,7 +48,7 @@ const CITY_COORDS = {
   '成都': [104.066, 30.572], '杭州': [120.155, 30.274], '西安': [108.948, 34.263], '重庆': [106.551, 29.563],
   '武汉': [114.305, 30.593], '南京': [118.797, 32.060], '天津': [117.190, 39.125], '长沙': [112.938, 28.228],
   '郑州': [113.625, 34.746], '青岛': [120.383, 36.067], '厦门': [118.089, 24.480], '昆明': [102.833, 24.881],
-  '沈阳': [123.429, 41.796], '大连': [121.618, 38.914], '苏州': [120.585, 31.299], '长治': [112.113, 36.191],
+  '沈阳': [123.429, 41.796], '大连': [121.618, 38.914], '苏州': [120.585, 31.299], '长治': [113.116, 36.195],
   '太原': [112.549, 37.857], '石家庄': [114.502, 38.045], '济南': [117.000, 36.675], '合肥': [117.283, 31.861],
   '福州': [119.306, 26.075], '南昌': [115.858, 28.682], '贵阳': [106.630, 26.647], '南宁': [108.320, 22.824],
   '海口': [110.199, 20.044], '兰州': [103.834, 36.061], '西宁': [101.778, 36.617], '银川': [106.278, 38.466],
@@ -211,25 +211,28 @@ function reverseCity(ll) {
     });
   });
 }
-/* 城市名 → 中心点坐标（内嵌模式手动选城市时，用中心坐标做"附近/路线"基准） */
+/* 城市名 → 中心点坐标（内嵌模式手动选城市时，用中心坐标做"附近/路线"基准）
+ * 优先内置坐标表 → Web 服务地理编码（不依赖已失效的 JS Key）→ JS API 兜底 */
 function cityToCenter(name) {
-  return new Promise((resolve, reject) => {
-    // 优先用内置坐标表（不依赖高德接口，白名单没配好也能用）
-    const key = (name || '').replace(/市$/, '').trim();
-    const hit = CITY_COORDS[key] || CITY_COORDS[name];
-    if (hit) {
-      const g = wgs84ToGcj02(hit[1], hit[0]);
-      resolve([g.lng, g.lat]);
-      return;
-    }
-    if (!geocoder) return reject(new Error('地图未加载'));
-    geocoder.getLocation(name, (status, res) => {
-      if (status === 'complete' && res.geocodes && res.geocodes.length) {
-        const loc = res.geocodes[0].location;
-        resolve([loc.lng, loc.lat]);
-      } else reject(new Error('城市解析失败'));
+  const key = (name || '').replace(/市$/, '').trim();
+  const hit = CITY_COORDS[key] || CITY_COORDS[name];
+  if (hit) {
+    const g = wgs84ToGcj02(hit[1], hit[0]);
+    return Promise.resolve([g.lng, g.lat]);
+  }
+  return wsGeocode(key + '市')
+    .catch(() => wsGeocode(name))
+    .catch(() => {
+      if (!geocoder) throw new Error('地图未加载');
+      return new Promise((resolve, reject) => {
+        geocoder.getLocation(name, (status, res) => {
+          if (status === 'complete' && res.geocodes && res.geocodes.length) {
+            const loc = res.geocodes[0].location;
+            resolve([loc.lng, loc.lat]);
+          } else reject(new Error('城市解析失败'));
+        });
+      });
     });
-  });
 }
 function searchNearby(keyword, colorKey) {
   let center = myLocation;
