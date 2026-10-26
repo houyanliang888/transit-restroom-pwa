@@ -975,19 +975,31 @@ function wsTextSearch(keyword, city, citylimit) {
     }).filter(x => x.loc);
   });
 }
-/* 目的地解析：先在本市搜（citylimit 防「高铁站」匹配外省同名点），
- * 高德瞬时 QPS 限流时会先重试一次本市搜索，彻底跑完城市限定才退到全国兜底 */
+/* 目的地解析：
+ * ① 本市限定搜索（citylimit）—— 高德瞬时 QPS 限流时最多重试 4 次（每次等 1.2s），
+ *    彻底跑完本市搜索，绝不退化到"无城市约束的全国搜索"（否则"高铁站"会被匹配到外省点）；
+ * ② 本市搜索实在为空的，再走地理编码；
+ * ③ 最后才全国兜底搜索。
+ * 同一「城市+目的地」命中缓存直接返回，避免重复打高德接口（既躲 QPS，又让重复查询秒出）。 */
+const _destCache = {};
 function resolveDest(name, city) {
-  const withRetry = (fn) => fn()
-    .catch(() => new Promise(r => setTimeout(r, 700)).then(fn))
-    .catch(() => []);
-  return withRetry(() => wsTextSearch(name, city || '', true))
-    .then(l1 => l1.length ? l1 : withRetry(() => wsTextSearch(name, city || '', false)))
-    .then(l2 => l2.length ? l2 : wsGeocode(name).then(loc => [{ name: name, addr: '地理编码匹配', city: '', loc: loc }]).catch(() => []))
-    .then(l3 => l3.length ? l3 : withRetry(() => wsTextSearch(name, '', false)))
+  const key = (name || '') + '@' + (city || '');
+  if (_destCache[key]) return Promise.resolve(_destCache[key]);
+  const retry = (fn, n, wait) => {
+    const attempt = (k) => fn().catch(err => {
+      if (k <= 1) return [];
+      return new Promise(r => setTimeout(r, wait)).then(() => attempt(k - 1));
+    });
+    return attempt(n);
+  };
+  return retry(() => wsTextSearch(name, city || '', true), 4, 1200)
+    .then(l1 => l1.length ? l1 : wsGeocode(name).then(loc => [{ name: name, addr: '地理编码匹配', city: '', loc: loc }]).catch(() => []))
+    .then(l2 => l2.length ? l2 : retry(() => wsTextSearch(name, '', false), 2, 1200))
     .then(list => {
       if (!list.length) throw new Error('目的地没找到，试试更具体的名字（如「长治东站」）');
-      return list[0];
+      const m = list[0];
+      _destCache[key] = m;
+      return m;
     });
 }
 /* Web 服务 API：地理编码 */
