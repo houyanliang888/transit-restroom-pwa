@@ -188,15 +188,27 @@ function onLocated(lng, lat) {
   toast('已定位');
 }
 function reverseCity(ll) {
-  geocoder.getAddress(ll, (status, res) => {
-    if (status === 'complete' && res.regeocode) {
-      const c = res.regeocode.addressComponent;
-      currentCity = (c.city || c.province || currentCity).replace(/市$/, '');
+  // 优先用 Web 服务逆地理编码（不依赖已失效的 JS API Key，最可靠）
+  wsRegeo(ll).then(r => {
+    if (r && r.city) {
+      currentCity = r.city;
       localStorage.setItem(CITY_KEY, currentCity);
       try { transfer.setCity(currentCity); } catch (e) {}
       try { lineSearch.setCity(currentCity); } catch (e) {}
       updateCityTag();
     }
+  }).catch(() => {
+    // JS API 兜底（旧路径），其 Key 失效时不会更新城市，但不会报错
+    geocoder.getAddress(ll, (status, res) => {
+      if (status === 'complete' && res.regeocode) {
+        const c = res.regeocode.addressComponent;
+        currentCity = (c.city || c.province || currentCity).replace(/市$/, '');
+        localStorage.setItem(CITY_KEY, currentCity);
+        try { transfer.setCity(currentCity); } catch (e) {}
+        try { lineSearch.setCity(currentCity); } catch (e) {}
+        updateCityTag();
+      }
+    });
   });
 }
 /* 城市名 → 中心点坐标（内嵌模式手动选城市时，用中心坐标做"附近/路线"基准） */
@@ -547,11 +559,17 @@ function escapeHTML(s) {
 function wsFallbackRoute(start, dest) {
   const city = selectedCity || currentCity || '';
   $('routePanel').innerHTML = '<p class="hint">规划中…</p>';
-  resolveDest(dest, city).then(m => {
-    // 先告诉用户目的地到底匹配到了哪，避免"输入高铁站却规划到外省"这种懵圈
-    const hint = '✅ 已匹配目的地：<b>' + escapeHTML(m.name) + '</b>'
-      + (m.city && m.city !== city ? '（' + escapeHTML(m.city) + '）' : '');
-    return wsTransit(start, m.loc, city || m.city).then(d => ({ d: d, m: m, hint: hint }));
+  // 传入用户当前坐标作为 origin：优先就近匹配目的地，杜绝"高铁站"被匹配到外省
+  resolveDest(dest, city, myLocation).then(m => {
+    // 出发城市缺失时（刚打开还没反查完），用起点坐标补一次反查，保证 transit 拿到城市
+    const cityP = city ? Promise.resolve(city)
+      : wsRegeo(start).then(r => r && r.city ? r.city : '').catch(() => '');
+    return cityP.then(c => {
+      const useCity = c || m.city || '';
+      const hint = '✅ 已匹配目的地：<b>' + escapeHTML(m.name) + '</b>'
+        + (m.city && m.city !== useCity ? '（' + escapeHTML(m.city) + '）' : '');
+      return wsTransit(start, m.loc, useCity).then(d => ({ d: d, m: m, hint: hint }));
+    });
   }).then(({ d, m, hint }) => {
     const plans = (d.route && d.route.transits) || [];
     if (!plans.length) {
@@ -975,15 +993,15 @@ function wsTextSearch(keyword, city, citylimit) {
     }).filter(x => x.loc);
   });
 }
-/* 目的地解析：
- * ① 本市限定搜索（citylimit）—— 高德瞬时 QPS 限流时最多重试 4 次（每次等 1.2s），
- *    彻底跑完本市搜索，绝不退化到"无城市约束的全国搜索"（否则"高铁站"会被匹配到外省点）；
- * ② 本市搜索实在为空的，再走地理编码；
- * ③ 最后才全国兜底搜索。
- * 同一「城市+目的地」命中缓存直接返回，避免重复打高德接口（既躲 QPS，又让重复查询秒出）。 */
+/* 目的地解析（优先就近，杜绝匹配外省）：
+ * 0. 若有用户坐标 origin：先以坐标为中心 60km 内搜同名地点（最可靠，"高铁站"一定落在本地）；
+ * 1. 本市限定搜索（citylimit）—— 高德 QPS 限流时重试 4 次，绝不退化到无约束全国搜索；
+ * 2. 本市搜索为空，再走地理编码；
+ * 3. 最后才全国兜底。
+ * 同一「城市/坐标 + 目的地」命中缓存直接返回（躲 QPS + 重复查询秒出）。 */
 const _destCache = {};
-function resolveDest(name, city) {
-  const key = (name || '') + '@' + (city || '');
+function resolveDest(name, city, origin) {
+  const key = (name || '') + '@' + (city || '') + '@' + (origin ? 'g' : '');
   if (_destCache[key]) return Promise.resolve(_destCache[key]);
   const retry = (fn, n, wait) => {
     const attempt = (k) => fn().catch(err => {
@@ -992,15 +1010,21 @@ function resolveDest(name, city) {
     });
     return attempt(n);
   };
-  return retry(() => wsTextSearch(name, city || '', true), 4, 1200)
-    .then(l1 => l1.length ? l1 : wsGeocode(name).then(loc => [{ name: name, addr: '地理编码匹配', city: '', loc: loc }]).catch(() => []))
-    .then(l2 => l2.length ? l2 : retry(() => wsTextSearch(name, '', false), 2, 1200))
-    .then(list => {
-      if (!list.length) throw new Error('目的地没找到，试试更具体的名字（如「长治东站」）');
-      const m = list[0];
-      _destCache[key] = m;
-      return m;
-    });
+  const fromNear = origin
+    ? wsPlaceAround(name, origin, 60000).catch(() => []).then(items => items.slice(0, 1).map(it => ({ name: it.name, addr: it.addr, city: city || '', loc: it.loc })))
+    : Promise.resolve([]);
+  return fromNear.then(near => {
+    if (near.length) { _destCache[key] = near[0]; return near[0]; }
+    return retry(() => wsTextSearch(name, city || '', true), 4, 1200)
+      .then(l1 => l1.length ? l1 : wsGeocode(name).then(loc => [{ name: name, addr: '地理编码匹配', city: '', loc: loc }]).catch(() => []))
+      .then(l2 => l2.length ? l2 : retry(() => wsTextSearch(name, '', false), 2, 1200))
+      .then(list => {
+        if (!list.length) throw new Error('目的地没找到，试试更具体的名字（如「长治东站」）');
+        const m = list[0];
+        _destCache[key] = m;
+        return m;
+      });
+  });
 }
 /* Web 服务 API：地理编码 */
 function wsGeocode(addr) {
@@ -1013,6 +1037,20 @@ function wsGeocode(addr) {
     const loc = parseLoc(d.geocodes[0].location);
     if (!loc) throw new Error('地理编码结果异常');
     return loc;
+  });
+}
+/* Web 服务 API：逆地理编码（坐标→城市）—— 不依赖已失效的 JS API Key，
+ * 保证 GPS 定位后能可靠拿到 currentCity（否则"高铁站"等目的地会被匹配到外省） */
+function wsRegeo(ll) {
+  const k = webKey();
+  if (!k) return Promise.reject(new Error('NO_WEB_KEY'));
+  const url = 'https://restapi.amap.com/v3/geocode/regeo?key=' + encodeURIComponent(k)
+    + '&location=' + ll[0] + ',' + ll[1] + '&extensions=base';
+  return jsonpRetry(url, 15000).then(d => {
+    if (!d || d.status !== '1' || !d.regeocode) throw new Error((d && d.info) || '逆地理编码失败');
+    const c = d.regeocode.addressComponent || {};
+    const city = (c.city || c.province || '').replace(/市$/, '');
+    return { city: city, full: (c.province || '') + (city ? city + '市' : '') + (c.district || '') };
   });
 }
 /* Web 服务 API：公交路径规划 */
