@@ -975,13 +975,16 @@ function wsTextSearch(keyword, city, citylimit) {
     }).filter(x => x.loc);
   });
 }
-/* 目的地解析：先在本市搜（citylimit 防止「高铁站」匹配到外地同名点），
- * 再搜「城市 + 关键词」，再地理编码，最后全国搜——四级兜底 */
+/* 目的地解析：先在本市搜（citylimit 防「高铁站」匹配外省同名点），
+ * 高德瞬时 QPS 限流时会先重试一次本市搜索，彻底跑完城市限定才退到全国兜底 */
 function resolveDest(name, city) {
-  return wsTextSearch(name, city || '', true).catch(() => [])
-    .then(l1 => l1.length ? l1 : (city ? wsTextSearch(city + ' ' + name, '', false).catch(() => []) : []))
+  const withRetry = (fn) => fn()
+    .catch(() => new Promise(r => setTimeout(r, 700)).then(fn))
+    .catch(() => []);
+  return withRetry(() => wsTextSearch(name, city || '', true))
+    .then(l1 => l1.length ? l1 : withRetry(() => wsTextSearch(name, city || '', false)))
     .then(l2 => l2.length ? l2 : wsGeocode(name).then(loc => [{ name: name, addr: '地理编码匹配', city: '', loc: loc }]).catch(() => []))
-    .then(l3 => l3.length ? l3 : wsTextSearch(name, '', false).catch(() => []))
+    .then(l3 => l3.length ? l3 : withRetry(() => wsTextSearch(name, '', false)))
     .then(list => {
       if (!list.length) throw new Error('目的地没找到，试试更具体的名字（如「长治东站」）');
       return list[0];
