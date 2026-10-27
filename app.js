@@ -167,7 +167,7 @@ const COLORS = { bus: '#16a34a', metro: '#0ea5e9', wc: '#f59e0b', me: '#2b6cff' 
 function locateMe() {
   if (!navigator.geolocation) { fallbackLocate(); return; }
   navigator.geolocation.getCurrentPosition(
-    (pos) => onLocated(pos.coords.longitude, pos.coords.latitude),
+    (pos) => onLocated(pos.coords.longitude, pos.coords.latitude, false),
     () => { toast('GPS 定位失败，尝试高精度定位'); fallbackLocate(); },
     { enableHighAccuracy: true, timeout: 9000, maximumAge: 0 }
   );
@@ -175,13 +175,15 @@ function locateMe() {
 function fallbackLocate() {
   const geo = new AMap.Geolocation({ enableHighAccuracy: true, timeout: 9000 });
   geo.getCurrentPosition((status, result) => {
-    if (status === 'complete') onLocated(result.position.lng, result.position.lat);
+    if (status === 'complete') onLocated(result.position.lng, result.position.lat, true);
     else toast('定位失败，请检查定位权限');
   });
 }
-function onLocated(lng, lat) {
-  myLocation = [lng, lat];
-  rawLocation = myLocation.slice();
+function onLocated(lng, lat, isGcj) {
+  // 浏览器原生 GPS 返回的是 WGS-84；高德 AMap.Geolocation 返回已是 GCJ-02（不能再转，否则双重偏移）
+  const gcj = isGcj ? { lng, lat } : wgs84ToGcj02(lat, lng);
+  myLocation = [gcj.lng, gcj.lat];   // 画在地图 / 做附近搜索都用纠偏后的 GCJ-02，才准
+  rawLocation = [lng, lat];           // 保留原始坐标（native GPS 为 WGS-84），供外部地图跳转使用
   map.setCenter(myLocation);
   addMarker(myLocation, '我的位置', COLORS.me);
   reverseCity(myLocation);
