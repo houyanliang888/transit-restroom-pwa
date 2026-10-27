@@ -37,7 +37,7 @@ body{display:flex;flex-direction:column;overflow:hidden;}
 .icon-btn:active{background:rgba(255,255,255,.3);}
 
 /* 地图 */
-#map{position:absolute;top:56px;left:0;right:0;bottom:64px;width:auto;}
+#map{position:absolute;top:56px;left:0;right:0;bottom:86px;width:auto;}
 
 /* 底部抽屉 */
 .sheet{
@@ -100,13 +100,25 @@ body{display:flex;flex-direction:column;overflow:hidden;}
 .nearby-menu button[data-color="wc"]{background:var(--wc);}
 .nearby-menu button:active{opacity:.85;}
 
+/* 私域沉淀小字条（底部栏顶一行，随栏常显） */
+#brandline{
+  height:22px;display:flex;align-items:center;justify-content:center;
+  border-bottom:1px solid var(--line);background:#fff;
+  font-size:10px;color:#64748b;letter-spacing:.5px;
+  white-space:nowrap;overflow:hidden;
+}
+#brandline b{color:#2b6cff;font-weight:600;}
+
 /* 底部操作栏 */
+/* 底部操作栏：顶一行私域小字 + 按钮排 */
 #bottombar{
-  position:fixed;left:0;right:0;bottom:0;z-index:28;height:64px;
-  background:#fff;border-top:1px solid var(--line);display:flex;
+  position:fixed;left:0;right:0;bottom:0;z-index:28;
+  background:#fff;border-top:1px solid var(--line);
+  display:flex;flex-direction:column;
   padding-bottom:env(safe-area-inset-bottom);
 }
-#bottombar button{
+#bottombar .bar-row{ display:flex;height:64px; }
+#bottombar .bar-row button{
   flex:1;border:none;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
   color:#475569;font-size:11px;cursor:pointer;
 }
