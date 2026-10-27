@@ -110,6 +110,39 @@ body{display:flex;flex-direction:column;overflow:hidden;}
 #brandline b{color:#2b6cff;font-weight:600;}
 
 /* 底部操作栏 */
+/* 启动封面 */
+#splash{
+  position:fixed;inset:0;z-index:999;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:
+    radial-gradient(600px 420px at 80% -10%, rgba(43,108,255,.4), transparent 62%),
+    radial-gradient(520px 400px at 0% 110%, rgba(14,165,233,.28), transparent 60%),
+    linear-gradient(160deg,#0a1730, #0b1c3e 52%, #081228);
+  color:#fff;text-align:center;transition:opacity .45s ease, transform .45s ease;
+}
+#splash.out{opacity:0;transform:scale(1.05);pointer-events:none;}
+#splash .s-grid{ position:absolute;inset:0;
+  background-image:linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px);
+  background-size:56px 56px;
+  -webkit-mask-image:radial-gradient(640px 560px at 50% 42%, #000 30%, transparent 88%);
+          mask-image:radial-gradient(640px 560px at 50% 42%, #000 30%, transparent 88%); }
+#splash .s-ring{ position:absolute;left:50%;top:40%;border:1px solid rgba(120,170,255,.22);border-radius:50%; }
+#splash .s-r1{ width:230px;height:230px;margin:-115px 0 0 -115px;animation:sPulse 2.2s ease-out infinite; }
+#splash .s-r2{ width:230px;height:230px;margin:-115px 0 0 -115px;animation:sPulse 2.2s ease-out 1.1s infinite; }
+@keyframes sPulse{ 0%{transform:scale(.72);opacity:.9;} 80%{transform:scale(1.5);opacity:0;} 100%{transform:scale(1.5);opacity:0;} }
+#splash .s-inner{ position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;transform:translateY(-9vh); }
+#splash .s-logo{ animation:sRise .7s ease both; }
+#splash h1{ margin-top:26px;font-size:44px;font-weight:800;letter-spacing:8px;animation:sRise .7s .12s ease both; }
+#splash .s-sub{ margin-top:14px;font-size:16px;color:#aebfe0;letter-spacing:3px;animation:sRise .7s .22s ease both; }
+#splash .s-tag{ margin-top:20px;padding:7px 20px;border-radius:999px;background:rgba(43,108,255,.16);
+  border:1px solid rgba(120,170,255,.45);font-size:12.5px;color:#cfe0ff;letter-spacing:2px;animation:sRise .7s .32s ease both; }
+#splash #btnEnter{ margin-top:44px;padding:14px 58px;border:none;border-radius:999px;cursor:pointer;
+  background:linear-gradient(90deg,#2b6cff,#3d8bff);color:#fff;font-size:17px;font-weight:600;letter-spacing:6px;
+  box-shadow:0 10px 30px rgba(43,108,255,.45);animation:sRise .7s .42s ease both; }
+#splash #btnEnter:active{transform:scale(.96);}
+#splash .s-status{ margin-top:16px;font-size:12px;color:#7d92b8;letter-spacing:1px;animation:sRise .7s .5s ease both; }
+#splash .s-foot{ position:absolute;bottom:calc(26px + env(safe-area-inset-bottom));font-size:12px;color:#6c7fa5;letter-spacing:2px; }
+@keyframes sRise{ 0%{opacity:0;transform:translateY(16px);} 100%{opacity:1;transform:translateY(0);} }
+
 /* 底部操作栏：顶一行私域小字 + 按钮排 */
 #bottombar{
   position:fixed;left:0;right:0;bottom:0;z-index:28;

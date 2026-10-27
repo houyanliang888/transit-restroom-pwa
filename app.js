@@ -1118,6 +1118,42 @@ function ensureBind() {
   catch (err) { try { toast('界面初始化出错：' + (err.message || err), 5000); } catch (_) {} }
 }
 
+/* ================= 启动封面 + 物理返回键接管 ================= */
+let lastBackAt = 0;
+function pushGuard() { try { history.pushState({ t: Date.now() }, '', location.href); } catch (e) {} }
+function enterApp() {
+  const sp = $('splash');
+  if (!sp || sp.classList.contains('out')) return;
+  sp.classList.add('out');
+  setTimeout(() => { sp.style.display = 'none'; }, 480);
+  pushGuard();   // 压一层栈：物理返回先到这里，而不是直接退出页面
+}
+window.addEventListener('popstate', () => {
+  const sp = $('splash');
+  if (sp && !sp.classList.contains('out')) { history.back(); return; }  // 封面上按返回 = 直接退出
+  // 有弹层：返回键先关弹层，一次关一层
+  if ($('sheet').classList.contains('open')) { closeSheet(); pushGuard(); return; }
+  if ($('nearbyMenu').classList.contains('open')) { $('nearbyMenu').classList.remove('open'); pushGuard(); return; }
+  const m = ['settingsModal', 'helpModal', 'cityModal'].find(id => !$(id).classList.contains('hidden'));
+  if (m) { $(m).classList.add('hidden'); pushGuard(); return; }
+  // 主界面：两秒内连按两次才真正退出
+  const now = Date.now();
+  if (now - lastBackAt < 2200) { history.back(); return; }
+  lastBackAt = now;
+  toast('再按一次返回键退出', 2000);
+  pushGuard();
+});
+(function initSplash() {
+  const sp = $('splash'); if (!sp) return;
+  $('btnEnter').addEventListener('click', enterApp);
+  sp.addEventListener('click', (e) => { if (e.target === sp) enterApp(); });  // 点空白处也能进
+  const t = setInterval(() => {
+    const el = $('splashStatus');
+    if (!el || sp.classList.contains('out')) { clearInterval(t); return; }
+    el.textContent = mode ? '已就绪 ✓' : '正在加载地图与定位…';
+  }, 600);
+})();
+
 async function boot() {
   // 地图底图加载用 Web 服务 Key：实测 jsapi get_tile 不校验 Key 类型，这把 Key 瓦片全通；
   // 旧 JS API Key 服务端始终 INVALID_USER_KEY（FlyDataAuthTask），导致地图只显示网格没有底图
