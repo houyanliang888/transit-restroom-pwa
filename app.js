@@ -1117,7 +1117,9 @@ function ensureBind() {
 }
 
 async function boot() {
-  const key = localStorage.getItem(STORE_KEY) || DEFAULT_AMAP_KEY;
+  // 地图底图加载用 Web 服务 Key：实测 jsapi get_tile 不校验 Key 类型，这把 Key 瓦片全通；
+  // 旧 JS API Key 服务端始终 INVALID_USER_KEY（FlyDataAuthTask），导致地图只显示网格没有底图
+  const key = webKey();
   const sec = localStorage.getItem(SEC_KEY) || DEFAULT_AMAP_SEC;
   try {
     AMap = await loadAMap(key, sec);   // loadAMap 内置 15 秒超时，不会永远挂起
