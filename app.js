@@ -178,8 +178,12 @@ function locateMe() {
   try {
     const geo = new AMap.Geolocation({ enableHighAccuracy: true, timeout: 9000, showButton: false, showMarker: false });
     geo.getCurrentPosition((status, result) => {
-      if (status === 'complete' && result.position) onLocated(result.position.lng, result.position.lat, true);
-      else nativeLocate();
+      if (status === 'complete' && result.position) {
+        onLocated(result.position.lng, result.position.lat, true);
+        if (result.accuracy && result.accuracy > 300) {
+          setTimeout(() => toast('定位可能偏差较大，点右下角📍校正到实际位置', 3500), 700);
+        }
+      } else nativeLocate();
     });
   } catch (e) { nativeLocate(); }
 }
@@ -719,8 +723,8 @@ function openMapNav() {
 }
 
 /* ================= 通用 UI ================= */
-function openSheet(title) { $('sheetTitle').textContent = title || '结果'; $('nearbyMenu').classList.remove('open'); $('sheet').classList.add('open'); }
-function closeSheet() { $('sheet').classList.remove('open'); }
+function openSheet(title) { $('sheetTitle').textContent = title || '结果'; $('nearbyMenu').classList.remove('open'); $('sheet').classList.add('open'); updateFixVisibility(); }
+function closeSheet() { $('sheet').classList.remove('open'); updateFixVisibility(); }
 
 /* 城市选择弹窗 */
 function openCityModal() {
@@ -751,18 +755,43 @@ function useMyLocation() {
   mode === 'embed' ? locateMe() : locateMeLite();
 }
 
-// 手动校正位置：开启后点地图即可把“我的位置”搬到点击处
+// 手动校正位置：开启后可在顶部搜索条搜地名，或直接点地图把“我的位置”搬到该处
 function setFixMode(on) {
   fixMode = on;
   const b = $('btnFix'); if (!b) return;
   b.classList.toggle('active', fixMode);
   b.textContent = fixMode ? '✓ 完成' : '📍 校正';
   $('fixHint').classList.toggle('hidden', !fixMode);
+  $('fixBar').classList.toggle('hidden', !fixMode);
+  if (fixMode && $('fixInput')) $('fixInput').value = '';
+}
+// 校正：按地名搜索（Web 服务 POI 文本搜索，最可靠）并直接把“我的位置”设到该 POI
+function fixSearch() {
+  const kw = $('fixInput').value.trim();
+  if (!kw) { toast('请输入位置，如：居然之家'); return; }
+  toast('校正中…');
+  wsTextSearch(kw, currentCity || '长治', true).then(list => {
+    if (list && list.length) {
+      const p = list[0];
+      onLocated(p.loc[0], p.loc[1], true);   // loc 为 [lng, lat] 数组
+      setFixMode(false);
+      toast('已校正到：' + p.name);
+    } else {
+      toast('未找到「' + kw + '」，换个说法或直接在地图点选');
+    }
+  }).catch(() => toast('未找到「' + kw + '」，换个说法或直接在地图点选'));
+}
+// 浮动校正按钮与面板互斥：打开抽屉/菜单时隐藏，避免压在路线/附近面板上重叠
+function updateFixVisibility() {
+  const anyPanel = $('sheet').classList.contains('open') || $('nearbyMenu').classList.contains('open');
+  const fb = $('btnFix');
+  if (fb) fb.style.display = anyPanel ? 'none' : 'flex';
+  if (anyPanel && fixMode) setFixMode(false);
 }
 // 返回：优先关闭弹层（一次一层）；主界面则“再按一次退出”，避免误触整页退出
 function onBack() {
   if ($('sheet').classList.contains('open')) { closeSheet(); pushGuard(); return; }
-  if ($('nearbyMenu').classList.contains('open')) { $('nearbyMenu').classList.remove('open'); pushGuard(); return; }
+  if ($('nearbyMenu').classList.contains('open')) { $('nearbyMenu').classList.remove('open'); updateFixVisibility(); pushGuard(); return; }
   const m = ['helpModal', 'cityModal'].find(id => !$(id).classList.contains('hidden'));
   if (m) { $(m).classList.add('hidden'); pushGuard(); return; }
   const now = Date.now();
@@ -778,6 +807,7 @@ function goHome() {
   ['helpModal', 'cityModal'].forEach(id => $(id).classList.add('hidden'));
   if (map && myLocation) map.setCenter(myLocation);
   toast('已回到主页');
+  updateFixVisibility();
 }
 function showBox(which) {
   ['nearbyBox', 'routeBox', 'lineBox'].forEach(id => $(id).classList.add('hidden'));
@@ -794,6 +824,8 @@ function bindAll() {
   $('btnHome').addEventListener('click', goHome);
   // 手动校正位置
   $('btnFix').addEventListener('click', () => setFixMode(!fixMode));
+  $('btnFixSearch').addEventListener('click', fixSearch);
+  $('fixInput').addEventListener('keydown', e => { if (e.key === 'Enter') fixSearch(); });
   // 说明弹窗
   $('btnHelpClose').addEventListener('click', () => $('helpModal').classList.add('hidden'));
   $('sheetClose').addEventListener('click', closeSheet);
@@ -811,10 +843,10 @@ function bindAll() {
   $('btnLocate').addEventListener('click', () => { setActive('btnLocate'); mode === 'embed' ? locateMe() : locateMeLite(); });
 
   // 附近（底部栏 → 弹出子菜单；内嵌模式用地图搜索，临时模式跳地图）
-  $('btnNearby').addEventListener('click', () => { setActive('btnNearby'); $('nearbyMenu').classList.toggle('open'); });
+  $('btnNearby').addEventListener('click', () => { setActive('btnNearby'); $('nearbyMenu').classList.toggle('open'); updateFixVisibility(); });
   $('nearbyMenu').querySelectorAll('button').forEach(b => {
     b.addEventListener('click', () => {
-      $('nearbyMenu').classList.remove('open');
+      $('nearbyMenu').classList.remove('open'); updateFixVisibility();
       if (mode === 'embed') { showBox('nearbyBox'); searchNearby(b.dataset.kw, b.dataset.color); }
       else { openMapSearch(b.dataset.kw); }
     });

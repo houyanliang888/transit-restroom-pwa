@@ -23,9 +23,16 @@
     <button id="btnHome" class="nav-btn" aria-label="主页">⌂ 主页</button>
   </header>
 
-  <!-- 手动校正位置浮动按钮（仅在地图模式显示） -->
+  <!-- 校正位置：顶部搜索条（仅在校正模式显示，不遮挡底部面板） -->
+  <div id="fixBar" class="fix-bar hidden">
+    <span class="fb-tip">位置不准？</span>
+    <input id="fixInput" type="text" placeholder="输入实际位置，如：居然之家" />
+    <button id="btnFixSearch" class="primary">校正</button>
+  </div>
+
+  <!-- 手动校正位置浮动按钮（仅在地图主视图显示） -->
   <button id="btnFix" class="fix-btn" aria-label="校正位置">📍 校正</button>
-  <div id="fixHint" class="fix-hint hidden">点击地图，标记你的真实位置</div>
+  <div id="fixHint" class="fix-hint hidden">在地图上点选你的真实位置，或点上方搜索条</div>
 
   <!-- 地图（填了 Key 的内嵌模式） -->
   <div id="map"></div>
@@ -187,6 +194,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <script src="./app.js?v=18"></script>
+  <script src="./app.js?v=19"></script>
 </body>
 </html>

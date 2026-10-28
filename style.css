@@ -41,6 +41,15 @@ body{display:flex;flex-direction:column;overflow:hidden;}
 .fix-hint{position:fixed;left:50%;transform:translateX(-50%);bottom:150px;z-index:29;
   background:rgba(15,23,42,.86);color:#fff;font-size:13px;padding:8px 14px;border-radius:20px;box-shadow:var(--shadow);
   white-space:nowrap;}
+/* 校正搜索条（顶部，不遮挡底部抽屉/菜单） */
+.fix-bar{position:fixed;top:56px;left:0;right:0;z-index:29;display:flex;align-items:center;gap:8px;
+  padding:8px 12px;background:#fff;border-bottom:1px solid var(--line);box-shadow:var(--shadow);}
+.fix-bar .fb-tip{font-size:13px;color:#ef4444;font-weight:700;white-space:nowrap;}
+.fix-bar input{flex:1;min-width:0;border:1px solid var(--line);border-radius:10px;padding:8px 10px;
+  font-size:13px;font-family:inherit;background:#f8fafc;}
+.fix-bar .primary{border:none;background:var(--accent);color:#fff;border-radius:10px;padding:8px 14px;
+  font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;}
+.fix-bar .primary:active{opacity:.85;}
 .city-pick .caret{font-size:9px;opacity:.85;flex:none;}
 .city-pick:active{background:rgba(255,255,255,.28);}
 .icon-btn{
