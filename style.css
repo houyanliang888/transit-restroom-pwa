@@ -38,6 +38,10 @@ body{display:flex;flex-direction:column;overflow:hidden;}
   display:flex;align-items:center;gap:4px;}
 .fix-btn.active{background:var(--wc);}
 .fix-btn:active{transform:scale(.96);}
+/* 自动定位偏差较大时跳动提示，引导用户去校正 */
+@keyframes fixpulse{0%,100%{transform:scale(1);box-shadow:0 6px 16px rgba(43,108,255,.45);}
+  50%{transform:scale(1.12);box-shadow:0 8px 22px rgba(43,108,255,.75);}}
+.fix-btn.pulse{animation:fixpulse 1s ease-in-out infinite;}
 .fix-hint{position:fixed;left:50%;transform:translateX(-50%);bottom:150px;z-index:29;
   background:rgba(15,23,42,.86);color:#fff;font-size:13px;padding:8px 14px;border-radius:20px;box-shadow:var(--shadow);
   white-space:nowrap;}

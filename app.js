@@ -12,6 +12,7 @@ const WS_KEY_STORE = 'amap_web_key_v1';  // 备用通道：Web服务 API Key（�
 const CITY_KEY  = 'last_city_v1';
 const SELCITY_KEY = 'selected_city_v1';
 const PROV_KEY  = 'map_provider_v1';
+const FIX_KEY   = 'transit_fixed_loc_v1';  // 用户手动校准的“我的位置”（跨会话记住，解决自动定位漂移）
 
 /* 内置高德 Key（侯哥申请，已配域名白名单防盗刷）。
  * 用户未在 ⚙ 自填时直接使用内置值 → 推广时任何人打开即用，无需配置。 */
@@ -27,6 +28,7 @@ let selectedCity = localStorage.getItem(SELCITY_KEY) || '';  // 用户手动选�
 const cityCenterCache = {};            // 城市名 → [lng,lat] 中心坐标缓存
 let myLocation = null;                 // [lng, lat]（高德 GCJ-02 坐标）
 let rawLocation = null;                // [lng, lat]（GPS WGS-84，未纠偏）
+let meMarker = null;                   // “我的位置”蓝点（常驻，不被搜索清除；校正时变可拖拽）
 let overlays = [];
 let placeSearch = null, transfer = null, lineSearch = null, geocoder = null;
 let mode = null;                       // 'embed' | 'lite'
@@ -141,7 +143,7 @@ function initMap() {
   map.on('click', (e) => {
     if (!fixMode) return;
     const ll = e.lnglat;
-    onLocated(ll.lng, ll.lat, true);
+    onLocated(ll.lng, ll.lat, true, true);   // 点地图校正，fromFix=true 保存
     setFixMode(false);
   });
   const fb = $('btnFix'); if (fb) fb.style.display = 'flex';
@@ -172,16 +174,59 @@ function pinHTML(color, title) {
 }
 const COLORS = { bus: '#16a34a', metro: '#0ea5e9', wc: '#f59e0b', me: '#2b6cff' };
 
+/* “我的位置”常驻蓝点：与搜索结果 marker 分开存，避免被 clearOverlays 清掉；
+ * 进入校正模式时设为可拖拽，用户直接把蓝点拖到真实位置（dragend 即重新定位并保存）。 */
+function setMeMarker(lnglat) {
+  if (!map) return;
+  if (!meMarker) {
+    meMarker = new AMap.Marker({
+      position: lnglat,
+      title: '我的位置',
+      offset: new AMap.Pixel(-15, -32),
+      content: pinHTML(COLORS.me, '我的位置'),
+      zIndex: 13,
+      draggable: false,
+      raiseOnDrag: true
+    });
+    meMarker.on('dragend', () => {
+      const p = meMarker.getPosition();
+      onLocated(p.lng, p.lat, true, true);   // 地图坐标已是 GCJ-02，fromFix=true 保存校准
+    });
+    map.add(meMarker);
+  } else {
+    meMarker.setPosition(lnglat);
+  }
+}
+function loadFixed() {
+  try { const s = JSON.parse(localStorage.getItem(FIX_KEY) || 'null'); return s && s.loc ? s : null; }
+  catch (e) { return null; }
+}
+function saveFixed(gcj) {
+  try {
+    localStorage.setItem(FIX_KEY, JSON.stringify({ loc: [gcj.lng, gcj.lat], city: currentCity, ts: Date.now() }));
+  } catch (e) {}
+}
+function pulseFix() { const b = $('btnFix'); if (b) b.classList.add('pulse'); }
+function unpulseFix() { const b = $('btnFix'); if (b) b.classList.remove('pulse'); }
+
 function locateMe() {
-  // 优先用高德定位组件：它内部会正确处理坐标系（返回 GCJ-02），
-  // 很多国产手机浏览器的"原生定位"返回的已是高德坐标，再手动纠偏会反偏 ~500 米
+  // 优先用「上次手动校准的位置」：自动定位漂移是手机硬件硬伤（室内 GPS 弱/网络定位偏 1–2km），
+  // 记住用户校准过的位置，下次打开直接准，不再每次都偏（本地工具，长治场景最实用）
+  const saved = loadFixed();
+  if (saved && saved.loc) {
+    onLocated(saved.loc[0], saved.loc[1], true, false);
+    toast('已用上次校准的位置（不准点📍校正）');
+    return;
+  }
+  // 无校准记录时再走自动定位；优先高德定位组件（内部正确处理坐标系，返回 GCJ-02）
   try {
     const geo = new AMap.Geolocation({ enableHighAccuracy: true, timeout: 9000, showButton: false, showMarker: false });
     geo.getCurrentPosition((status, result) => {
       if (status === 'complete' && result.position) {
-        onLocated(result.position.lng, result.position.lat, true);
+        onLocated(result.position.lng, result.position.lat, true, false);
         if (result.accuracy && result.accuracy > 300) {
           setTimeout(() => toast('定位可能偏差较大，点右下角📍校正到实际位置', 3500), 700);
+          pulseFix();
         }
       } else nativeLocate();
     });
@@ -195,15 +240,16 @@ function nativeLocate() {
     { enableHighAccuracy: true, timeout: 9000, maximumAge: 0 }
   );
 }
-function onLocated(lng, lat, isGcj) {
+function onLocated(lng, lat, isGcj, fromFix) {
   // 浏览器原生 GPS 返回的是 WGS-84；高德 AMap.Geolocation 返回已是 GCJ-02（不能再转，否则双重偏移）
   const gcj = isGcj ? { lng, lat } : wgs84ToGcj02(lat, lng);
   myLocation = [gcj.lng, gcj.lat];   // 画在地图 / 做附近搜索都用纠偏后的 GCJ-02，才准
   rawLocation = [lng, lat];           // 保留原始坐标（native GPS 为 WGS-84），供外部地图跳转使用
   map.setCenter(myLocation);
-  addMarker(myLocation, '我的位置', COLORS.me);
+  setMeMarker(myLocation);            // 常驻蓝点（校正时可拖拽），不进 overlays，搜索不会被清掉
   reverseCity(myLocation);
-  toast('已定位');
+  if (fromFix) { saveFixed(gcj); unpulseFix(); toast('已校正到你的位置'); }
+  else toast('已定位');
 }
 function reverseCity(ll) {
   // 优先用 Web 服务逆地理编码（不依赖已失效的 JS API Key，最可靠）
@@ -741,7 +787,7 @@ function chooseCity(name) {
   closeCityModal();
   toast('已选择城市：' + selectedCity);
   if (mode === 'embed' && map) {
-    const apply = (ll) => { myLocation = ll; map.setCenter(ll); clearOverlays(); addMarker(ll, selectedCity, COLORS.me); };
+    const apply = (ll) => { myLocation = ll; map.setCenter(ll); clearOverlays(); setMeMarker(ll); };
     if (cityCenterCache[selectedCity]) apply(cityCenterCache[selectedCity]);
     else cityToCenter(selectedCity).then(ll => { cityCenterCache[selectedCity] = ll; apply(ll); }).catch(() => toast('城市解析失败'));
   }
@@ -755,7 +801,7 @@ function useMyLocation() {
   mode === 'embed' ? locateMe() : locateMeLite();
 }
 
-// 手动校正位置：开启后可在顶部搜索条搜地名，或直接点地图把“我的位置”搬到该处
+// 手动校正位置：开启后可在顶部搜索条搜地名、点地图选点，或直接把蓝点“拖”到真实位置
 function setFixMode(on) {
   fixMode = on;
   const b = $('btnFix'); if (!b) return;
@@ -763,7 +809,13 @@ function setFixMode(on) {
   b.textContent = fixMode ? '✓ 完成' : '📍 校正';
   $('fixHint').classList.toggle('hidden', !fixMode);
   $('fixBar').classList.toggle('hidden', !fixMode);
-  if (fixMode && $('fixInput')) $('fixInput').value = '';
+  if (fixMode) { if ($('fixInput')) $('fixInput').value = ''; unpulseFix(); }
+  else unpulseFix();   // 退出校正模式也取消跳动提示
+  // 校正模式下蓝点变可拖拽：用户直接拖动到真实位置（最直觉的“我在这儿”手势）
+  if (meMarker) meMarker.setDraggable(fixMode);
+  if (fixMode && map && myLocation) {
+    try { map.panTo(myLocation); } catch (e) {}
+  }
 }
 // 校正：按地名搜索（Web 服务 POI 文本搜索，最可靠）并直接把“我的位置”设到该 POI
 function fixSearch() {
@@ -773,7 +825,7 @@ function fixSearch() {
   wsTextSearch(kw, currentCity || '长治', true).then(list => {
     if (list && list.length) {
       const p = list[0];
-      onLocated(p.loc[0], p.loc[1], true);   // loc 为 [lng, lat] 数组
+      onLocated(p.loc[0], p.loc[1], true, true);   // loc 为 [lng, lat] 数组；fromFix=true 保存校准
       setFixMode(false);
       toast('已校正到：' + p.name);
     } else {
