@@ -21,7 +21,7 @@ const DEFAULT_AMAP_SEC = 'fcb59b20ee438f984b347c10b035c1cf';
  * 用途：① JS 通道不可用时的兜底；② 别人在别的域名打开时也能正常搜索/规划。 */
 const DEFAULT_WEB_KEY = '8c7f3a832c406cfed4d74b8ed0a94b02';
 
-let AMap = null, map = null;
+let AMap = null, map = null, fixMode = false;
 let currentCity = localStorage.getItem(CITY_KEY) || '';
 let selectedCity = localStorage.getItem(SELCITY_KEY) || '';  // 用户手动选择的城市（空=用 GPS）
 const cityCenterCache = {};            // 城市名 → [lng,lat] 中心坐标缓存
@@ -137,6 +137,14 @@ function initMap() {
   $('map').style.display = 'block';
   $('litePanel').classList.add('hidden');
   map = new AMap.Map('map', { zoom: 14, viewMode: '2D', resizeEnable: true });
+  // 手动校正：开启校正模式后，点地图即把“我的位置”搬到点击处（地图坐标为 GCJ-02，无需再转）
+  map.on('click', (e) => {
+    if (!fixMode) return;
+    const ll = e.lnglat;
+    onLocated(ll.lng, ll.lat, true);
+    setFixMode(false);
+  });
+  const fb = $('btnFix'); if (fb) fb.style.display = 'flex';
   placeSearch = new AMap.PlaceSearch({ pageSize: 25, pageIndex: 1 });
   transfer = new AMap.Transfer({ map: map, city: currentCity, policy: AMap.TransferPolicy.LEAST_TIME, panel: 'routePanel' });
   lineSearch = new AMap.LineSearch({ city: currentCity, pageSize: 1, extensions: 'all' });
@@ -652,6 +660,8 @@ function wsFallbackRoute(start, dest) {
 function enterLite() {
   mode = 'lite';
   $('map').style.display = 'none';
+  const fb = $('btnFix'); if (fb) fb.style.display = 'none';
+  const fh = $('fixHint'); if (fh) fh.classList.add('hidden');
   $('litePanel').classList.remove('hidden');
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
   $('providerSel').value = provider();
@@ -741,6 +751,34 @@ function useMyLocation() {
   mode === 'embed' ? locateMe() : locateMeLite();
 }
 
+// 手动校正位置：开启后点地图即可把“我的位置”搬到点击处
+function setFixMode(on) {
+  fixMode = on;
+  const b = $('btnFix'); if (!b) return;
+  b.classList.toggle('active', fixMode);
+  b.textContent = fixMode ? '✓ 完成' : '📍 校正';
+  $('fixHint').classList.toggle('hidden', !fixMode);
+}
+// 返回：优先关闭弹层（一次一层）；主界面则“再按一次退出”，避免误触整页退出
+function onBack() {
+  if ($('sheet').classList.contains('open')) { closeSheet(); pushGuard(); return; }
+  if ($('nearbyMenu').classList.contains('open')) { $('nearbyMenu').classList.remove('open'); pushGuard(); return; }
+  const m = ['helpModal', 'cityModal'].find(id => !$(id).classList.contains('hidden'));
+  if (m) { $(m).classList.add('hidden'); pushGuard(); return; }
+  const now = Date.now();
+  if (now - lastBackAt < 2200) { history.back(); return; }
+  lastBackAt = now;
+  toast('再按一次返回键退出', 2000);
+  pushGuard();
+}
+// 主页：关闭所有弹层并回到以“我的位置”为中心的地图主视图（绝不退出页面）
+function goHome() {
+  closeSheet();
+  $('nearbyMenu').classList.remove('open');
+  ['helpModal', 'cityModal'].forEach(id => $(id).classList.add('hidden'));
+  if (map && myLocation) map.setCenter(myLocation);
+  toast('已回到主页');
+}
 function showBox(which) {
   ['nearbyBox', 'routeBox', 'lineBox'].forEach(id => $(id).classList.add('hidden'));
   if (which) $(which).classList.remove('hidden');
@@ -751,6 +789,11 @@ function setActive(id) {
 }
 
 function bindAll() {
+  // 顶栏：返回 / 主页
+  $('btnBack').addEventListener('click', onBack);
+  $('btnHome').addEventListener('click', goHome);
+  // 手动校正位置
+  $('btnFix').addEventListener('click', () => setFixMode(!fixMode));
   // 说明弹窗
   $('btnHelpClose').addEventListener('click', () => $('helpModal').classList.add('hidden'));
   $('sheetClose').addEventListener('click', closeSheet);
