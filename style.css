@@ -37,11 +37,11 @@ body{display:flex;flex-direction:column;overflow:hidden;}
 .icon-btn:active{background:rgba(255,255,255,.3);}
 
 /* 地图 */
-#map{position:absolute;top:56px;left:0;right:0;bottom:86px;width:auto;}
+#map{position:absolute;top:56px;left:0;right:0;bottom:86px;width:auto;z-index:1;}
 
 /* 底部抽屉 */
 .sheet{
-  position:fixed;left:0;right:0;bottom:64px;z-index:25;
+  position:fixed;left:0;right:0;bottom:86px;z-index:25;
   background:var(--card);border-radius:18px 18px 0 0;box-shadow:var(--shadow);
   transform:translateY(110%);transition:transform .28s ease;max-height:62vh;display:flex;flex-direction:column;
 }
@@ -85,7 +85,7 @@ body{display:flex;flex-direction:column;overflow:hidden;}
 
 /* 附近子菜单（内嵌模式） */
 .nearby-menu{
-  position:fixed;left:0;right:0;bottom:64px;z-index:26;
+  position:fixed;left:0;right:0;bottom:86px;z-index:26;
   background:var(--card);border-radius:16px 16px 0 0;box-shadow:var(--shadow);
   padding:14px;display:flex;gap:10px;justify-content:space-around;
   transform:translateY(110%);transition:transform .25s ease;

@@ -165,19 +165,23 @@ function pinHTML(color, title) {
 const COLORS = { bus: '#16a34a', metro: '#0ea5e9', wc: '#f59e0b', me: '#2b6cff' };
 
 function locateMe() {
-  if (!navigator.geolocation) { fallbackLocate(); return; }
+  // 优先用高德定位组件：它内部会正确处理坐标系（返回 GCJ-02），
+  // 很多国产手机浏览器的"原生定位"返回的已是高德坐标，再手动纠偏会反偏 ~500 米
+  try {
+    const geo = new AMap.Geolocation({ enableHighAccuracy: true, timeout: 9000, showButton: false, showMarker: false });
+    geo.getCurrentPosition((status, result) => {
+      if (status === 'complete' && result.position) onLocated(result.position.lng, result.position.lat, true);
+      else nativeLocate();
+    });
+  } catch (e) { nativeLocate(); }
+}
+function nativeLocate() {
+  if (!navigator.geolocation) { toast('定位失败，请检查定位权限'); return; }
   navigator.geolocation.getCurrentPosition(
     (pos) => onLocated(pos.coords.longitude, pos.coords.latitude, false),
-    () => { toast('GPS 定位失败，尝试高精度定位'); fallbackLocate(); },
+    () => toast('定位失败，请检查定位权限'),
     { enableHighAccuracy: true, timeout: 9000, maximumAge: 0 }
   );
-}
-function fallbackLocate() {
-  const geo = new AMap.Geolocation({ enableHighAccuracy: true, timeout: 9000 });
-  geo.getCurrentPosition((status, result) => {
-    if (status === 'complete') onLocated(result.position.lng, result.position.lat, true);
-    else toast('定位失败，请检查定位权限');
-  });
 }
 function onLocated(lng, lat, isGcj) {
   // 浏览器原生 GPS 返回的是 WGS-84；高德 AMap.Geolocation 返回已是 GCJ-02（不能再转，否则双重偏移）
@@ -705,7 +709,7 @@ function openMapNav() {
 }
 
 /* ================= 通用 UI ================= */
-function openSheet(title) { $('sheetTitle').textContent = title || '结果'; $('sheet').classList.add('open'); }
+function openSheet(title) { $('sheetTitle').textContent = title || '结果'; $('nearbyMenu').classList.remove('open'); $('sheet').classList.add('open'); }
 function closeSheet() { $('sheet').classList.remove('open'); }
 
 /* 城市选择弹窗 */
@@ -741,33 +745,14 @@ function showBox(which) {
   ['nearbyBox', 'routeBox', 'lineBox'].forEach(id => $(id).classList.add('hidden'));
   if (which) $(which).classList.remove('hidden');
 }
-function openSettings() {
-  $('keyInput').value = localStorage.getItem(STORE_KEY) || DEFAULT_AMAP_KEY;
-  $('secInput').value = localStorage.getItem(SEC_KEY) || DEFAULT_AMAP_SEC;
-  $('webKeyInput').value = localStorage.getItem(WS_KEY_STORE) || '';
-  $('settingsModal').classList.remove('hidden');
-}
 function setActive(id) {
   ['btnLocate', 'btnNearby', 'btnRoute', 'btnLine'].forEach(b => $(b).classList.remove('active'));
   if (id) $(id).classList.add('active');
 }
 
 function bindAll() {
-  // 设置
-  $('btnSettings').addEventListener('click', openSettings);
-  $('btnSaveKey').addEventListener('click', () => {
-    const k = $('keyInput').value.trim();
-    const s = $('secInput').value.trim();
-    const wk = $('webKeyInput').value.trim();
-    if (k) localStorage.setItem(STORE_KEY, k);
-    if (s) localStorage.setItem(SEC_KEY, s); else localStorage.removeItem(SEC_KEY);
-    if (wk) localStorage.setItem(WS_KEY_STORE, wk); else localStorage.removeItem(WS_KEY_STORE);
-    $('settingsModal').classList.add('hidden');
-    location.reload();
-  });
-  $('btnHelp').addEventListener('click', () => $('helpModal').classList.remove('hidden'));
+  // 说明弹窗
   $('btnHelpClose').addEventListener('click', () => $('helpModal').classList.add('hidden'));
-  $('btnSelfCheck').addEventListener('click', runSelfCheck);
   $('sheetClose').addEventListener('click', closeSheet);
   $('providerSel').addEventListener('change', () => localStorage.setItem(PROV_KEY, $('providerSel').value));
 
@@ -1134,7 +1119,7 @@ window.addEventListener('popstate', () => {
   // 有弹层：返回键先关弹层，一次关一层
   if ($('sheet').classList.contains('open')) { closeSheet(); pushGuard(); return; }
   if ($('nearbyMenu').classList.contains('open')) { $('nearbyMenu').classList.remove('open'); pushGuard(); return; }
-  const m = ['settingsModal', 'helpModal', 'cityModal'].find(id => !$(id).classList.contains('hidden'));
+  const m = ['cityModal'].find(id => !$(id).classList.contains('hidden'));
   if (m) { $(m).classList.add('hidden'); pushGuard(); return; }
   // 主界面：两秒内连按两次才真正退出
   const now = Date.now();
